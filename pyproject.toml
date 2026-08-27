@@ -1,0 +1,59 @@
+[project]
+name = "gls-model"
+version = "0.1.0"
+description = "From-scratch decoder-only transformer: training, fine-tuning, and inference infrastructure."
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "torch>=2.13.0",
+    "numpy>=2.1",
+    "datasets>=3.0",
+    "tokenizers>=0.21",
+    "safetensors>=0.4.5",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "ruff>=0.8",
+]
+# transformers is establishing a greedy-decode correctness reference.
+eval = [
+    "transformers>=4.48",
+    "lm-eval>=0.4.5",
+]
+# Only if W&B wins over the self-rolled JSONL logger.
+track = [
+    "wandb>=0.19",
+]
+
+# Torch is pulled from the CUDA 12.9 wheel index rather than PyPI. cu129 over
+# cu130 on purpose: CUDA 12.x minor-version compatibility means these wheels run
+# on any driver >= 525, which covers both this machine (580.142) and a Lambda
+# Labs instance that happens to ship an older driver. cu130 would require
+# driver >= 580 everywhere. To switch, change the URL and the name in both
+# places below.
+[[tool.uv.index]]
+name = "pytorch-cu129"
+url = "https://download.pytorch.org/whl/cu129"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu129", marker = "sys_platform == 'linux'" }]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/gls"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+# E - error, F - flake8, I - isort, UP - pyupgrade, B - black
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

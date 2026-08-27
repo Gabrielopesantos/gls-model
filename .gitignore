@@ -1,0 +1,27 @@
+# devenv
+.devenv*
+devenv.local.nix
+devenv.local.yaml
+
+# direnv
+.direnv
+
+# git-hooks
+.pre-commit-config.yaml
+
+# python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+
+# secrets
+.env
+
+# project artifacts
+checkpoints/
+runs/
+wandb/
+data/
+*.safetensors
