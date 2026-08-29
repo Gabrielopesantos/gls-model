@@ -12,9 +12,10 @@
       enable = true;
       sync = {
         enable = true;
-        # Only the dev group by default. The eval and track groups
-        # are installed on demand with `uv sync --group`.
-        groups = [ "dev" ];
+        # dev + track (wandb) by default - per-step loss/LR curves are a
+        # standard part of a run now. The eval group (transformers, lm-eval)
+        # stays on-demand with `uv sync --group eval`.
+        groups = [ "dev" "track" ];
       };
     };
 
@@ -32,6 +33,8 @@
   env.LD_LIBRARY_PATH = lib.mkAfter "${pkgs.addDriverRunpath.driverLink}/lib";
 
   packages = [
+    pkgs.nvitop
+
     # Large unfree download, and most nsight runs happen on
     # the rented GPU box rather than here.
     # pkgs.cudaPackages.nsight_systems
@@ -43,6 +46,18 @@
 
   scripts.check.exec = ''
     pytest -q "$@"
+  '';
+
+  scripts.tokenizer.exec = ''
+    python -m gls.tokenizer "$@"
+  '';
+
+  scripts.data.exec = ''
+    python -m gls.data "$@"
+  '';
+
+  scripts.train.exec = ''
+    python -m gls.train "$@"
   '';
 
   scripts.fmt.exec = ''

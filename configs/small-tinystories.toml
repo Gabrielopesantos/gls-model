@@ -1,0 +1,21 @@
+# Phase 0 smoke test - reproduces the measured run in
+# privatedocs/plan/phase-0-baseline-model.md (eval val loss 10.35 -> 1.836).
+#
+#   python -m gls.data prepare --corpus tinystories --split train --limit 120000
+#   python -m gls.data prepare --corpus tinystories --split val   --limit 12000
+#   python -m gls.train --config configs/small-tinystories.toml
+
+tier = "small"
+corpus = "tinystories"
+steps = 1200
+
+lr = 6e-4
+warmup_steps = 60
+
+log_interval = 10
+eval_interval = 100
+eval_iters = 40
+ckpt_interval = 300
+keep_last = 3
+
+run_name = "small-tinystories"
