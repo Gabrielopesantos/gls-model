@@ -10,7 +10,7 @@ from gls import cli
 def test_bare_invocation_lists_subcommands(capsys):
     with pytest.raises(SystemExit):
         cli.main([])
-    assert "{train,data,tokenizer,env}" in capsys.readouterr().err
+    assert "{train,data,tokenizer,eval,env}" in capsys.readouterr().err
 
 
 def test_train_help_exits_zero():
@@ -43,3 +43,21 @@ def test_config_then_cli_flag_precedence(tmp_path, monkeypatch):
 
     assert seen["cfg"].lr == 0.001  # CLI over file
     assert seen["cfg"].steps == 99  # file over default
+
+
+def test_init_from_with_resume_is_not_an_error(tmp_path, monkeypatch):
+    # resume-after-kill re-runs the same config, which carries init_from; the
+    # run's own checkpoint wins in train() and the seed is ignored - no conflict.
+    seen = {}
+    monkeypatch.setattr(cli, "train", lambda cfg: seen.setdefault("cfg", cfg))
+    ckpt = tmp_path / "ckpt"
+    ckpt.mkdir()
+    (ckpt / "model.safetensors").write_bytes(b"")  # resolve_init only checks existence
+    cli.main(["train", "--init-from", str(ckpt), "--resume", "auto"])
+    assert seen["cfg"].init_from == str(ckpt) and seen["cfg"].resume == "auto"
+
+
+def test_init_from_nonexistent_path_rejected_before_training(monkeypatch):
+    monkeypatch.setattr(cli, "train", lambda cfg: pytest.fail("train ran with a bad --init-from"))
+    with pytest.raises(SystemExit, match="no checkpoint"):
+        cli.main(["train", "--init-from", "/no/such/checkpoint"])

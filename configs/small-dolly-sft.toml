@@ -1,0 +1,40 @@
+# Instruction fine-tune of the `small` smoke-test model on Dolly-15k.
+#
+# This is the pipeline check - `small` is 21.7M params trained on TinyStories, so
+# the lm-eval task scores stay at chance. The real signal is the response-token
+# perplexity delta on the held-out Dolly split:
+#
+#   gls eval ppl --ckpt runs/small-tinystories --corpus dolly   # baseline
+#   gls train --config configs/small-dolly-sft.toml
+#   gls eval ppl --ckpt runs/small-dolly-sft --corpus dolly     # after
+#   gls eval harness --ckpt runs/small-dolly-sft --tasks piqa   # scores at chance on small
+#   # resume after a kill (init_from in this file is ignored once the run has state):
+#   gls train --config configs/small-dolly-sft.toml --resume auto
+
+tier = "small"
+corpus = "dolly"
+init_from = "runs/small-tinystories"
+steps = 400
+
+# 16 x 8 accum = 128 example-draws/step; over 400 steps ~3.5x the 14k train
+# split in expected draws (sampling is with replacement, not epoch-based).
+batch_size = 16
+grad_accum = 8
+
+# An order of magnitude below the 6e-4 pretrain peak - a fine-tune nudges, it
+# does not relearn.
+lr = 2e-5
+warmup_steps = 20
+min_lr_frac = 0.1
+
+# Dolly ships train-only; carve a deterministic 5% holdout by example.
+val_fraction = 0.05
+
+log_interval = 10
+eval_interval = 50
+eval_iters = 40
+ckpt_interval = 100
+keep_last = 3
+
+run_name = "small-dolly-sft"
+wandb_project = "gls-model"

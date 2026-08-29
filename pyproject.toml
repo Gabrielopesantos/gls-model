@@ -20,7 +20,9 @@ dev = [
     "ruff>=0.8",
     "pyright>=1.1.400",
 ]
-# transformers is establishing a greedy-decode correctness reference.
+# lm-eval scores tasks through our own GLSModel adapter (gls.evaluate); it is
+# here for simple_evaluate and the task data. transformers backs `gls eval
+# export` - the Phase 2 greedy-decode reference and adapter cross-check.
 eval = [
     "transformers>=4.48",
     "lm-eval>=0.4.5",

@@ -226,6 +226,29 @@ def test_llama_roundtrip_is_a_rename():
 # --- the model can actually learn -------------------------------------
 
 
+def test_ignore_index_masks_targets():
+    # SFT supervises the response span only: prompt/pad positions carry -100 and
+    # must not move the loss. A batch masked to a single live target must give
+    # the same loss as that target computed alone.
+    cfg = _tiny_cfg()
+    torch.manual_seed(0)
+    model = GLSModel(cfg).eval()
+    ids = torch.randint(0, cfg.vocab, (1, 12))
+
+    y_one = torch.full((1, 12), -100)
+    y_one[0, 5] = ids[0, 6]
+    with torch.no_grad():
+        masked = model(ids, y_one)[1]
+        logits = model(ids)[0]
+    direct = torch.nn.functional.cross_entropy(logits[0, 5:6], ids[0, 6:7])
+    assert torch.allclose(masked, direct, atol=1e-5)
+
+    # all -100 -> loss is nan (no terms), never a silent 0
+    with torch.no_grad():
+        empty = model(ids, torch.full((1, 12), -100))[1]
+    assert torch.isnan(empty)
+
+
 def test_training_reduces_loss(tmp_path):
     import numpy as np
 

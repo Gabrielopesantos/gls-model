@@ -32,6 +32,12 @@
   # inside the shell even though nvidia-smi works outside it.
   env.LD_LIBRARY_PATH = lib.mkAfter "${pkgs.addDriverRunpath.driverLink}/lib";
 
+  # Triton locates libcuda by shelling out to a hard-coded /sbin/ldconfig, which
+  # does not exist on NixOS. Point it at the driver link (same path as above) so
+  # any Triton path - torch.compile, a hand-written kernel, an HF model whose
+  # kernels dispatch through Triton - skips that probe.
+  env.TRITON_LIBCUDA_PATH = "${pkgs.addDriverRunpath.driverLink}/lib";
+
   packages = [
     pkgs.nvitop
 
@@ -51,14 +57,6 @@
   # Thin wrappers over the one `gls` console script, kept for muscle memory.
   scripts.tokenizer.exec = ''
     gls tokenizer "$@"
-  '';
-
-  scripts.data.exec = ''
-    gls data "$@"
-  '';
-
-  scripts.train.exec = ''
-    gls train "$@"
   '';
 
   scripts.fmt.exec = ''
