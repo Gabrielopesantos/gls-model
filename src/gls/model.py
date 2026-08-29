@@ -1,12 +1,10 @@
-"""Decoder-only transformer: the Phase 0 baseline architecture.
+"""Decoder-only transformer.
 
-Every choice here is closed in ``privatedocs/plan/`` and implemented, not
-reopened: grouped-query attention, rotary position encoding in the
-``rotate_half`` (GPT-NeoX) layout, RMSNorm, SwiGLU, tied input/output
-embeddings, no bias terms. Together these keep every preset expressible as a
-``transformers`` ``LlamaConfig`` so Phase 2's greedy-decode equivalence gate
-gets a reference at matching shape (see ``phase-0-baseline-model.md`` ->
-"Llama-expressible"). ``llama_config_dict``/``to_llama_state_dict`` are that
+Grouped-query attention, rotary position encoding in the ``rotate_half``
+(GPT-NeoX) layout, RMSNorm, SwiGLU, tied input/output embeddings, no bias
+terms. Together these keep every preset expressible as a ``transformers``
+``LlamaConfig``, so a greedy-decode equivalence gate gets a reference at
+matching shape. ``llama_config_dict``/``to_llama_state_dict`` are that
 converter, and they are a pure rename table by construction.
 
 Size is data, not code: one ``ModelConfig``, three named ``PRESETS``, no
@@ -17,6 +15,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import asdict, dataclass
+from typing import Any
 
 import torch
 import torch.nn.functional as F
@@ -49,9 +48,9 @@ class ModelConfig:
     rms_norm_eps: float = 1e-5
     tie_embeddings: bool = True
     # Our presets are all biasless (matches LlamaConfig defaults, keeps the
-    # Phase 2 converter a rename). The flag exists because Qwen2/2.5 puts a bias
-    # on q/k/v, and Qwen2.5-0.5B is a Phase 2 secondary-check candidate whose
-    # weights would not otherwise load into this module.
+    # Llama converter a rename). The flag exists because Qwen2/2.5 puts a bias
+    # on q/k/v, and Qwen2.5-0.5B is a secondary-check candidate whose weights
+    # would not otherwise load into this module.
     attention_bias: bool = False
 
     def __post_init__(self) -> None:
@@ -67,12 +66,33 @@ class ModelConfig:
                 f"n_heads ({self.n_heads}) must be a multiple of n_kv_heads ({self.n_kv_heads})"
             )
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, d: dict) -> ModelConfig:
-        return cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
+    def from_dict(cls, d: dict[str, Any]) -> ModelConfig:
+        """Load a config.json back. An unrecognised key is an error, not a
+        silent drop - a typo must not quietly load a wrong architecture."""
+        known = set(cls.__dataclass_fields__)
+        out: dict[str, Any] = {}
+        unknown: list[str] = []
+        for key, value in d.items():
+            mapped = _ALIASES.get(key, key)
+            if mapped in known:
+                out[mapped] = value
+            else:
+                unknown.append(key)
+        if unknown:
+            raise ValueError(
+                f"unknown ModelConfig keys {sorted(unknown)} - checkpoint from a newer gls, "
+                "or a typo"
+            )
+        return cls(**out)
+
+
+# Old field name -> current, for checkpoints written before a rename. Empty so
+# far; the single place backward-compatibility logic is allowed to live.
+_ALIASES: dict[str, str] = {}
 
 
 # Dimensions mirrored from privatedocs/plan/model-sizes.md#tiers. This is the
@@ -111,7 +131,7 @@ PRESETS: dict[str, ModelConfig] = {
 
 def kv_bytes_per_token(cfg: ModelConfig, dtype_bytes: int = 2) -> int:
     """KV-cache bytes for one token at one position: K and V, every layer, every
-    KV head. The number the Phase 3 paged allocator is budgeted in."""
+    KV head. The unit a paged KV allocator is budgeted in."""
     return 2 * cfg.n_layers * cfg.n_kv_heads * cfg.head_dim * dtype_bytes
 
 
@@ -165,8 +185,8 @@ def apply_rope(q: Tensor, k: Tensor, cos: Tensor, sin: Tensor) -> tuple[Tensor, 
 
 class Attention(nn.Module):
     """Grouped-query attention. q/o stay full width; k/v shrink to n_kv_heads -
-    this is what cuts the KV cache 4x and is a hard architecture requirement, not
-    a tuning knob (model-sizes.md#gqa-sets-the-phase-3-cache-budget)."""
+    this is what cuts the KV cache 4x. It sets the KV-cache budget and is a hard
+    architecture requirement, not a tuning knob."""
 
     def __init__(self, cfg: ModelConfig) -> None:
         super().__init__()
@@ -196,9 +216,9 @@ class Attention(nn.Module):
         k = self.k_proj(x).view(B, T, self.n_kv_heads, self.head_dim).transpose(1, 2)
         v = self.v_proj(x).view(B, T, self.n_kv_heads, self.head_dim).transpose(1, 2)
 
-        # RoPE positions run from the cached prefix length onward. Phase 0 never
-        # passes a cache, so this is arange(T); the branch is here so Phase 2's
-        # incremental decode lands in the signature, not as a rewrite.
+        # RoPE positions run from the cached prefix length onward. With no cache
+        # this is arange(T); the branch is here so incremental decode lands in
+        # the signature, not as a later rewrite.
         offset = 0 if past_kv is None else past_kv[0].shape[2]
         q, k = apply_rope(q, k, cos[offset : offset + T], sin[offset : offset + T])
 
@@ -208,7 +228,7 @@ class Attention(nn.Module):
         new_kv = (k, v) if return_kv else None
 
         # GQA: replicate each KV head n_rep times to face all query heads. Kept
-        # explicit - Phase 2/3 read this path closely.
+        # explicit - the incremental-decode path reads it closely.
         k = k.repeat_interleave(self.n_rep, dim=1)
         v = v.repeat_interleave(self.n_rep, dim=1)
 
@@ -294,7 +314,7 @@ class GLSModel(nn.Module):
         # Special-token embedding rows: the 12 reserved slots and <|pad|> are
         # never emitted by data.prepare, so they get no gradient; with tied
         # embeddings a random row would still emit spurious logits from the
-        # output head. Zero them (phase-0-baseline-model.md#reserved-tokens).
+        # output head. Zero them.
         # (<|endoftext|>, row 0, *is* trained - it joins every document pair.)
         with torch.no_grad():
             self.embed_tokens.weight[:N_SPECIAL].zero_()
@@ -348,10 +368,10 @@ def build_model(tier: str) -> GLSModel:
 # --------------------------------------------------------------------------- #
 
 
-def llama_config_dict(cfg: ModelConfig) -> dict:
+def llama_config_dict(cfg: ModelConfig) -> dict[str, Any]:
     """The kwargs for a transformers LlamaConfig equivalent to this ModelConfig.
     Field-for-field; no derived geometry, because head_dim*n_heads == d_model in
-    every preset (phase-2-inference-baseline.md#scope)."""
+    every preset."""
     return {
         "vocab_size": cfg.vocab,
         "hidden_size": cfg.d_model,

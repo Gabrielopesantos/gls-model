@@ -6,9 +6,9 @@ Two sources, one sampling interface (``.batch(batch_size, device, val=...)``):
   flat ``uint16`` files ``data/packed/<corpus>/<split>-00000.bin`` (+01, ...),
   each capped at ``--shard-tokens`` tokens, with a ``<split>-index.json``
   listing the completed shards. ``PackedData`` ``np.memmap``s them and presents
-  one logical array for random ``block_size + 1`` window sampling. The single
-  ``.bin`` layout from Phase 0 (``data/packed/<corpus>-<split>.bin``) still
-  loads unchanged.
+  one logical array for random ``block_size + 1`` window sampling. A single
+  ``.bin`` file (``data/packed/<corpus>-<split>.bin``) also loads, via
+  ``resolve_source``'s fallback.
 
 * **Live stream (``--stream``).** ``StreamingTokens`` pulls
   ``load_dataset(..., streaming=True)``, tokenizes in a background thread, and
@@ -18,30 +18,30 @@ Two sources, one sampling interface (``.batch(batch_size, device, val=...)``):
   survive a restart exactly.
 
 vocab 32000 fits ``uint16``. Documents are joined with the ``<|endoftext|>`` id.
-Exactly-once sharding across ranks is a Phase 1.5 concern; the ``(rank,
-world_size)`` argument here is the seam for it and defaults to ``(0, 1)``.
+Exactly-once sharding across ranks is a distributed-training concern; the
+``(rank, world_size)`` argument here is the seam for it and defaults to ``(0, 1)``.
 
-    python -m gls.data prepare --corpus tinystories --split train
-    python -m gls.data prepare --corpus fineweb-edu --split train --shard-tokens 100_000_000
+    gls data prepare --corpus tinystories --split train
+    gls data prepare --corpus fineweb-edu --split train --shard-tokens 100_000_000
 """
 
 from __future__ import annotations
 
-import argparse
 import itertools
 import json
-import os
 import queue
 import sys
 import threading
 from bisect import bisect_right
+from collections.abc import Sequence
 from pathlib import Path
+from typing import Any, Protocol, runtime_checkable
 
 import numpy as np
 import torch
 from torch import Tensor
 
-from gls.tokenizer import _artifact_path, _repo_root
+from gls import paths
 
 CORPORA: dict[str, dict] = {
     "tinystories": {
@@ -59,7 +59,44 @@ CORPORA: dict[str, dict] = {
 }
 
 _ENCODE_CHUNK = 2_000  # docs per encode_batch call
-_DEFAULT_SHARD_TOKENS = 100_000_000  # ~200 MiB per shard at uint16
+DEFAULT_SHARD_TOKENS = 100_000_000  # ~200 MiB per shard at uint16
+
+
+# --------------------------------------------------------------------------- #
+# the contract train() samples through                                        #
+# --------------------------------------------------------------------------- #
+
+
+@runtime_checkable
+class TokenSource(Protocol):
+    """What ``gls.train`` needs from a corpus. Two implementations:
+    ``PackedData`` (memmapped shards, random ``block_size + 1`` windows) and
+    ``StreamingTokens`` (HF stream tokenized on the fly, sequential windows).
+
+    ``checkpoint_state`` is whatever the source must record to resume where it
+    left off - ``{}`` for the packed source (position is the sampler RNG's, not
+    the data's), ``{"_stream_docs": n}`` for the stream.
+    """
+
+    block_size: int
+
+    @property
+    def has_val(self) -> bool: ...
+
+    def n_tokens(self, val: bool = False) -> int | None: ...
+
+    def batch(
+        self,
+        batch_size: int,
+        device: str | torch.device,
+        val: bool = False,
+        generator: torch.Generator | None = None,
+        pin_memory: bool = False,
+    ) -> tuple[Tensor, Tensor]: ...
+
+    def checkpoint_state(self) -> dict[str, Any]: ...
+
+    def close(self) -> None: ...
 
 
 # --------------------------------------------------------------------------- #
@@ -67,17 +104,13 @@ _DEFAULT_SHARD_TOKENS = 100_000_000  # ~200 MiB per shard at uint16
 # --------------------------------------------------------------------------- #
 
 
-def _packed_dir() -> Path:
-    return _repo_root() / "data" / "packed"
-
-
 def packed_path(corpus: str, split: str) -> Path:
-    """Legacy single-file location from Phase 0. Still read by ``PackedData``."""
-    return _packed_dir() / f"{corpus}-{split}.bin"
+    """Legacy single-file location. Still read by ``PackedData``."""
+    return paths.packed_dir() / f"{corpus}-{split}.bin"
 
 
 def shard_dir(corpus: str) -> Path:
-    return _packed_dir() / corpus
+    return paths.packed_dir() / corpus
 
 
 def _index_path(corpus: str, split: str) -> Path:
@@ -101,10 +134,17 @@ def resolve_source(corpus: str, split: str) -> Path | None:
 def _load_tokenizer():
     from tokenizers import Tokenizer
 
-    path = _artifact_path()
+    path = paths.tokenizer_artifact()
     if not path.exists():
-        raise SystemExit(f"missing {path} - run `python -m gls.tokenizer train` first")
+        raise SystemExit(f"missing {path} - run `gls tokenizer train` first")
     return Tokenizer.from_file(str(path))
+
+
+def _eot_id(tok) -> int:
+    eot = tok.token_to_id("<|endoftext|>")
+    if eot is None:
+        raise SystemExit("tokenizer artifact has no <|endoftext|> token")
+    return eot
 
 
 def _open_stream(corpus: str, split: str):
@@ -133,7 +173,7 @@ def prepare(
     split: str,
     limit: int | None = None,
     force: bool = False,
-    shard_tokens: int = _DEFAULT_SHARD_TOKENS,
+    shard_tokens: int = DEFAULT_SHARD_TOKENS,
 ) -> Path:
     """Encode a corpus split to sharded uint16 arrays. Idempotent.
 
@@ -158,7 +198,7 @@ def prepare(
         stale.unlink()
 
     tok = _load_tokenizer()
-    eot = tok.token_to_id("<|endoftext|>")
+    eot = _eot_id(tok)
 
     ds, field = _open_stream(corpus, split)
     rows = iter(ds)
@@ -212,12 +252,22 @@ def prepare(
 # --------------------------------------------------------------------------- #
 
 
+def _to_device(
+    x: Tensor, y: Tensor, device: str | torch.device, pin_memory: bool
+) -> tuple[Tensor, Tensor]:
+    """Move a sampled batch to ``device``. ``pin_memory`` enables the pinned +
+    non-blocking H2D copy that overlaps with compute."""
+    if pin_memory:
+        x, y = x.pin_memory(), y.pin_memory()
+    return x.to(device, non_blocking=pin_memory), y.to(device, non_blocking=pin_memory)
+
+
 class _Shards:
     """One or more memmapped uint16 arrays presented as a single logical array.
     Reads that straddle a shard boundary are stitched (rare - a boundary is just
     another arbitrary cut in an already-concatenated token stream)."""
 
-    def __init__(self, arrays: list[np.ndarray]):
+    def __init__(self, arrays: Sequence[np.ndarray]):
         self._arrays = arrays
         self._cum = [0]
         for a in arrays:
@@ -254,8 +304,8 @@ class PackedData:
     carves the tail of the train stream.
 
     ``rank``/``world_size`` partition the train stream into disjoint contiguous
-    slabs, one per rank - a no-op at the default ``(0, 1)``, the hook for Phase
-    1.5's data sharding.
+    slabs, one per rank - a no-op at the default ``(0, 1)``, the hook for
+    distributed sharding.
     """
 
     def __init__(
@@ -271,13 +321,16 @@ class PackedData:
     ) -> None:
         source = Path(source)
         if not source.exists():
-            raise SystemExit(f"missing {source} - run `python -m gls.data prepare` first")
+            raise SystemExit(f"missing {source} - run `gls data prepare` first")
         train = _open_shards(source, split)
         train_len = len(train)
 
         if val_source is not None and Path(val_source).exists():
             if val_fraction > 0.0:
-                print("[data] --val-fraction ignored: a prepared 'val' split is present")
+                print(
+                    "[data] --val-fraction ignored: a prepared 'val' split is present",
+                    file=sys.stderr,
+                )
             self._val = _open_shards(Path(val_source), "val")
         elif val_fraction > 0.0:
             # Carve the tail. Only the (small) val slice is materialised in RAM;
@@ -307,12 +360,19 @@ class PackedData:
     def n_tokens(self, val: bool = False) -> int:
         return len(self._split(val))
 
+    def checkpoint_state(self) -> dict[str, Any]:
+        return {}
+
+    def close(self) -> None:
+        pass
+
     def batch(
         self,
         batch_size: int,
         device: str | torch.device,
         val: bool = False,
         generator: torch.Generator | None = None,
+        pin_memory: bool = False,
     ) -> tuple[Tensor, Tensor]:
         data = self._split(val)
         if val:
@@ -324,14 +384,7 @@ class PackedData:
         ix = torch.randint(lo, hi, (batch_size,), generator=generator).tolist()
         xs = np.stack([data.read(i, self.block_size).astype(np.int64) for i in ix])
         ys = np.stack([data.read(i + 1, self.block_size).astype(np.int64) for i in ix])
-        x = torch.from_numpy(xs)
-        y = torch.from_numpy(ys)
-        if str(device).startswith("cuda"):
-            return (
-                x.pin_memory().to(device, non_blocking=True),
-                y.pin_memory().to(device, non_blocking=True),
-            )
-        return x.to(device), y.to(device)
+        return _to_device(torch.from_numpy(xs), torch.from_numpy(ys), device, pin_memory)
 
 
 # --------------------------------------------------------------------------- #
@@ -345,7 +398,7 @@ class StreamingTokens:
     A background thread reads + tokenizes documents into a bounded queue; the
     main thread pulls token chunks and slices windows from a rolling buffer.
     No validation split (``has_val`` is always False). ``n_tokens`` is unknown
-    and returns ``-1``. Resume fast-forwards by ``skip_docs`` documents, which
+    and returns ``None``. Resume fast-forwards by ``skip_docs`` documents, which
     lands the stream near - not exactly at - the pre-kill position.
     """
 
@@ -366,11 +419,16 @@ class StreamingTokens:
         self._worker = threading.Thread(target=self._run, args=(skip_docs,), daemon=True)
         self._worker.start()
 
-    has_val = False
+    @property
+    def has_val(self) -> bool:
+        return False
+
+    def checkpoint_state(self) -> dict[str, Any]:
+        return {"_stream_docs": self.docs_consumed}
 
     def _run(self, skip_docs: int) -> None:
         tok = _load_tokenizer()
-        eot = tok.token_to_id("<|endoftext|>")
+        eot = _eot_id(tok)
         ds, field = _open_stream(self.corpus, "train")
         rows = itertools.islice(iter(ds), skip_docs, None)
         try:
@@ -388,8 +446,8 @@ class StreamingTokens:
         finally:
             self._q.put(None)
 
-    def n_tokens(self, val: bool = False) -> int:
-        return -1
+    def n_tokens(self, val: bool = False) -> int | None:
+        return None
 
     def _fill(self, need: int) -> None:
         while len(self._buf) < need:
@@ -406,6 +464,7 @@ class StreamingTokens:
         device: str | torch.device,
         val: bool = False,
         generator: torch.Generator | None = None,
+        pin_memory: bool = False,
     ) -> tuple[Tensor, Tensor]:
         span = self.block_size + 1
         self._fill(batch_size * span)
@@ -413,50 +472,7 @@ class StreamingTokens:
         self._buf = self._buf[batch_size * span :]
         x = torch.from_numpy(np.ascontiguousarray(windows[:, :-1]))
         y = torch.from_numpy(np.ascontiguousarray(windows[:, 1:]))
-        if str(device).startswith("cuda"):
-            return (
-                x.pin_memory().to(device, non_blocking=True),
-                y.pin_memory().to(device, non_blocking=True),
-            )
-        return x.to(device), y.to(device)
+        return _to_device(x, y, device, pin_memory)
 
     def close(self) -> None:
         self._stop.set()
-
-
-# --------------------------------------------------------------------------- #
-# cli                                                                         #
-# --------------------------------------------------------------------------- #
-
-
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="gls.data", description=__doc__.splitlines()[0])
-    sub = parser.add_subparsers(dest="cmd", required=True)
-    p = sub.add_parser("prepare", help="encode a corpus split to packed uint16 shards")
-    p.add_argument("--corpus", default="tinystories", choices=list(CORPORA))
-    p.add_argument("--split", default="train", choices=["train", "val"])
-    p.add_argument("--limit", type=int, default=None, help="cap document count (dev)")
-    p.add_argument("--shard-tokens", type=int, default=_DEFAULT_SHARD_TOKENS)
-    p.add_argument("--force", action="store_true", help="rebuild even if present")
-    args = parser.parse_args(argv)
-
-    if args.cmd == "prepare":
-        prepare(
-            args.corpus,
-            args.split,
-            limit=args.limit,
-            force=args.force,
-            shard_tokens=args.shard_tokens,
-        )
-    return 0
-
-
-if __name__ == "__main__":
-    rc = main()
-    # The HF streaming parquet reader spawns background threads that can fault
-    # ("PyGILState_Release", "Bad file descriptor") during normal interpreter
-    # shutdown. All shards and the index are already durably on disk by here, so
-    # bypass finalization rather than let a cosmetic crash mask a clean run.
-    sys.stdout.flush()
-    sys.stderr.flush()
-    os._exit(rc)

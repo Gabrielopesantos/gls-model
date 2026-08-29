@@ -1,19 +1,18 @@
 """Project tokenizer: train a byte-level BPE on the target corpus, and prove the
 choice with a measured bake-off against a spread of off-the-shelf tokenizers.
 
-Phase 0 fixes vocab at 32000 (128-aligned) and one tokenizer for all three
-tiers - a decision with Phase 4 consequences (speculative decoding needs draft
-and target to share a vocab), documented in
+Vocab is fixed at 32000 (128-aligned), one tokenizer for all three tiers -
+speculative decoding needs draft and target to share a vocab. Documented in
 ``privatedocs/plan/model-sizes.md``.
 
 Subcommands::
 
-    python -m gls.tokenizer fetch      # cache a fixed FineWeb-Edu slice locally
-    python -m gls.tokenizer train      # train artifacts/tokenizer/tokenizer.json
-    python -m gls.tokenizer compare    # leaderboard: chars/token, own vs refs
-    python -m gls.tokenizer stats      # vocab coverage on the holdout
-    python -m gls.tokenizer sweep      # chars/token vs training-corpus size
-    python -m gls.tokenizer domains    # chars/token off-domain (code, other langs)
+    gls tokenizer fetch      # cache a fixed FineWeb-Edu slice locally
+    gls tokenizer train      # train artifacts/tokenizer/tokenizer.json
+    gls tokenizer compare    # leaderboard: chars/token, own vs refs
+    gls tokenizer stats      # vocab coverage on the holdout
+    gls tokenizer sweep      # chars/token vs training-corpus size
+    gls tokenizer domains    # chars/token off-domain (code, other langs)
 
 ``compare`` decides which artifact ships: own must beat the best 32k reference
 by >3% chars/token. A bigger-vocab tokenizer scoring higher on raw chars/token
@@ -22,7 +21,6 @@ is not an argument to adopt it - see the break-even section it prints.
 
 from __future__ import annotations
 
-import argparse
 import gzip
 import itertools
 import json
@@ -30,6 +28,8 @@ import tempfile
 from collections import Counter
 from collections.abc import Iterator
 from pathlib import Path
+
+from gls import paths
 
 VOCAB_SIZE = 32_000
 
@@ -84,9 +84,9 @@ def _tiers() -> dict[str, dict]:
     }
 
 
-# Reserved now, not bolted on in Phase 1 - adding special tokens later resizes
-# the embedding with randomly initialised rows. endoftext + pad + a chat pair +
-# a block of reserved slots, all counted toward VOCAB_SIZE by the trainer.
+# Reserved up front - adding special tokens later resizes the embedding with
+# randomly initialised rows. endoftext + pad + a chat pair + a block of
+# reserved slots, all counted toward VOCAB_SIZE by the trainer.
 SPECIAL_TOKENS = [
     "<|endoftext|>",
     "<|pad|>",
@@ -106,7 +106,7 @@ SWEEP_POINTS = (25_000, 50_000, 100_000, 200_000)
 # Off-domain probe for `domains`: (label, hf_name, config, text_field). All
 # ungated and streamable. The point is to show, reproducibly, where an
 # English-prose tokenizer degrades - soft on code/Romance/math, a wall on
-# non-Latin scripts. Scope reasoning in privatedocs/plan/phase-0-baseline-model.md.
+# non-Latin scripts.
 DOMAIN_SAMPLE = 1_500
 DOMAIN_SETS = [
     ("Alpaca (En instruct)", "tatsu-lab/alpaca", None, "text"),
@@ -122,16 +122,8 @@ DOMAIN_SETS = [
 ]
 
 
-def _repo_root() -> Path:
-    return Path(__file__).resolve().parents[2]
-
-
-def _artifact_path() -> Path:
-    return _repo_root() / "artifacts" / "tokenizer" / "tokenizer.json"
-
-
 def _corpus_paths() -> dict[str, Path]:
-    base = _repo_root() / "data" / "tokenizer-corpus"
+    base = paths.data_dir() / "tokenizer-corpus"
     return {"train": base / "train.jsonl.gz", "holdout": base / "holdout.jsonl.gz"}
 
 
@@ -149,12 +141,12 @@ def fetch(force: bool = False) -> None:
     """
     from datasets import load_dataset
 
-    paths = _corpus_paths()
-    if not force and paths["train"].exists() and paths["holdout"].exists():
-        print(f"corpus already cached at {paths['train'].parent} (use --force to refetch)")
+    cp = _corpus_paths()
+    if not force and cp["train"].exists() and cp["holdout"].exists():
+        print(f"corpus already cached at {cp['train'].parent} (use --force to refetch)")
         return
 
-    paths["train"].parent.mkdir(parents=True, exist_ok=True)
+    cp["train"].parent.mkdir(parents=True, exist_ok=True)
     stream = load_dataset(DATASET, name=DATASET_CONFIG, split="train", streaming=True)
     it = iter(stream)
 
@@ -167,10 +159,10 @@ def fetch(force: bool = False) -> None:
                     print(f"  {label}: {i + 1}/{count}")
         print(f"wrote {dest}")
 
-    drain(paths["train"], TRAIN_DOCS, "train")
+    drain(cp["train"], TRAIN_DOCS, "train")
     for _ in range(HOLDOUT_GAP):
         next(it)
-    drain(paths["holdout"], HOLDOUT_DOCS, "holdout")
+    drain(cp["holdout"], HOLDOUT_DOCS, "holdout")
 
     # The streaming parquet reader can fault during interpreter shutdown; close
     # the generator deterministically now that we are done with it.
@@ -179,7 +171,7 @@ def fetch(force: bool = False) -> None:
 
 def _iter_texts(path: Path, limit: int | None = None) -> Iterator[str]:
     if not path.exists():
-        raise SystemExit(f"missing {path} - run `python -m gls.tokenizer fetch` first")
+        raise SystemExit(f"missing {path} - run `gls tokenizer fetch` first")
     with gzip.open(path, "rt", encoding="utf-8") as fh:
         for line in itertools.islice(fh, limit):
             yield json.loads(line)["text"]
@@ -216,7 +208,7 @@ def train() -> None:
     if not _corpus_paths()["train"].exists():
         fetch()
 
-    out = _artifact_path()
+    out = paths.tokenizer_artifact()
     tok = _train_bpe(_iter_texts(_corpus_paths()["train"]), TRAIN_DOCS, out)
 
     got = tok.get_vocab_size()
@@ -235,9 +227,9 @@ def train() -> None:
 def _load_own():
     from tokenizers import Tokenizer
 
-    path = _artifact_path()
+    path = paths.tokenizer_artifact()
     if not path.exists():
-        raise SystemExit(f"missing {path} - run `python -m gls.tokenizer train` first")
+        raise SystemExit(f"missing {path} - run `gls tokenizer train` first")
     return Tokenizer.from_file(str(path))
 
 
@@ -393,9 +385,7 @@ def _domain_docs(hf_name: str, config: str | None, field: str) -> list[str]:
 
 
 def domains() -> None:
-    """chars/token across domains the tokenizer was NOT trained for.
-
-    Reproduces the off-domain table in phase-0-baseline-model.md: soft degrade
+    """chars/token across domains the tokenizer was NOT trained for: soft degrade
     on code/Romance/math, a hard wall (<1.2 chars/token) on non-Latin scripts.
     Network-heavy; a domain that fails to load is skipped, not fatal.
     """
@@ -425,41 +415,3 @@ def domains() -> None:
 
 def _tokens(tok, docs: list[str]) -> int:
     return sum(len(tok.encode(d, add_special_tokens=False).ids) for d in docs)
-
-
-# --------------------------------------------------------------------------- #
-# cli                                                                         #
-# --------------------------------------------------------------------------- #
-
-
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="gls.tokenizer", description=__doc__.splitlines()[0])
-    sub = parser.add_subparsers(dest="cmd", required=True)
-
-    f = sub.add_parser("fetch", help="cache the fixed FineWeb-Edu slice locally")
-    f.add_argument("--force", action="store_true", help="refetch even if cached")
-    sub.add_parser("train", help="train the byte-level BPE artifact")
-    sub.add_parser("compare", help="leaderboard: chars/token, own vs references")
-    sub.add_parser("stats", help="vocab coverage on the holdout")
-    sub.add_parser("sweep", help="chars/token vs training-corpus size")
-    sub.add_parser("domains", help="chars/token across off-domain text (code, other langs)")
-
-    args = parser.parse_args(argv)
-
-    if args.cmd == "fetch":
-        fetch(force=args.force)
-    elif args.cmd == "train":
-        train()
-    elif args.cmd == "compare":
-        compare()
-    elif args.cmd == "stats":
-        stats()
-    elif args.cmd == "sweep":
-        sweep()
-    elif args.cmd == "domains":
-        domains()
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

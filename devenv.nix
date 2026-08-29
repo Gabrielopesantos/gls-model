@@ -41,23 +41,24 @@
   ];
 
   scripts.gpu-check.exec = ''
-    python -m gls.env
+    gls env
   '';
 
   scripts.check.exec = ''
-    pytest -q "$@"
+    pyright && pytest -q "$@"
   '';
 
+  # Thin wrappers over the one `gls` console script, kept for muscle memory.
   scripts.tokenizer.exec = ''
-    python -m gls.tokenizer "$@"
+    gls tokenizer "$@"
   '';
 
   scripts.data.exec = ''
-    python -m gls.data "$@"
+    gls data "$@"
   '';
 
   scripts.train.exec = ''
-    python -m gls.train "$@"
+    gls train "$@"
   '';
 
   scripts.fmt.exec = ''
@@ -67,6 +68,7 @@
   git-hooks.hooks =
     let
       ruff = "${config.devenv.state}/venv/bin/ruff";
+      pyright = "${config.devenv.state}/venv/bin/pyright";
     in
     {
       ruff-lint = {
@@ -83,6 +85,14 @@
         entry = "${ruff} format";
         types = [ "python" ];
         pass_filenames = true;
+      };
+
+      pyright = {
+        enable = true;
+        name = "pyright";
+        entry = "${pyright}";
+        types = [ "python" ];
+        pass_filenames = false;
       };
     };
 

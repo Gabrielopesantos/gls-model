@@ -2,9 +2,9 @@
 
 A checkpoint is a directory ``checkpoints/step-NNNNNN/`` holding:
 
-* ``model.safetensors`` + ``config.json`` - unchanged from Phase 0: weights plus
-  the architecture dims, loadable on their own by ``load_model_dir`` and by
-  Phase 2's converter. This pair is the deliverable a checkpoint *is*.
+* ``model.safetensors`` + ``config.json`` - weights plus the architecture dims,
+  loadable on their own by ``load_model_dir`` and by the Llama converter. This
+  pair is the deliverable a checkpoint *is*.
 * ``trainer.pt`` - everything else needed to continue the run byte-for-byte:
   optimizer moments, the step counter, CPU + CUDA RNG, the data sampler's
   generator state, and the resolved ``TrainConfig`` dict.
@@ -31,13 +31,13 @@ CKPT_SUBDIR = "checkpoints"
 
 
 # --------------------------------------------------------------------------- #
-# model dir - the Phase 0 pair, kept stable                                   #
+# model dir - weights + config, kept stable                                   #
 # --------------------------------------------------------------------------- #
 
 
 def save_model_dir(model: GLSModel, out_dir: Path, step: int) -> None:
     """``safetensors`` weights + ``config.json`` in one directory - loadable
-    without external context (phase-0-baseline-model.md)."""
+    without external context."""
     from safetensors.torch import save_model
 
     out_dir.mkdir(parents=True, exist_ok=True)

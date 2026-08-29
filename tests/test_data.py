@@ -7,7 +7,7 @@ import json
 import numpy as np
 import torch
 
-from gls.data import PackedData, _Shards
+from gls.data import PackedData, StreamingTokens, TokenSource, _Shards
 
 
 def _write_shards(tmp_path, split, sizes):
@@ -65,3 +65,29 @@ def test_val_fraction_carves_tail(tmp_path):
     assert data.n_tokens(val=True) == 100
     # train slab must not reach into the val tail
     assert data._hi <= 900
+
+
+# --- both sources honour the TokenSource contract train() samples through -----
+
+
+def test_packeddata_is_a_token_source(tmp_path):
+    d = _write_shards(tmp_path, "train", [200])
+    data = PackedData(d, block_size=8)
+    assert isinstance(data, TokenSource)
+    assert data.has_val is False
+    assert data.n_tokens() == 200
+    assert data.checkpoint_state() == {}  # position lives in the sampler RNG
+    data.close()  # no-op, must exist
+
+
+def test_streamingtokens_conforms_without_starting_the_worker():
+    # __init__ spins a network thread; bypass it and check the contract members
+    # the refactor changed: has_val is a property (False), n_tokens is unknown
+    # (None), checkpoint_state carries the doc cursor for approximate resume.
+    st = object.__new__(StreamingTokens)
+    st.docs_consumed = 7
+    st.block_size = 16
+    assert isinstance(st, TokenSource)
+    assert st.has_val is False
+    assert st.n_tokens() is None
+    assert st.checkpoint_state() == {"_stream_docs": 7}

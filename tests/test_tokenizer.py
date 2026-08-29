@@ -1,29 +1,29 @@
 """Tokenizer artifact checks.
 
 Tests using the `tok` fixture skip when the artifact is absent, so the suite
-stays green before `python -m gls.tokenizer train` has been run (mirrors
+stays green before `gls tokenizer train` has been run (mirrors
 test_env.py). Constant-only tests always run.
 """
 
 import pytest
 
+from gls.paths import tokenizer_artifact
 from gls.tokenizer import (
     DOMAIN_SETS,
     REFERENCES,
     SPECIAL_TOKENS,
     VOCAB_SIZE,
-    _artifact_path,
     _tiers,
 )
 
 
 @pytest.fixture(scope="module")
 def tok():
-    if not _artifact_path().exists():
-        pytest.skip("tokenizer artifact not trained yet (`python -m gls.tokenizer train`)")
+    if not tokenizer_artifact().exists():
+        pytest.skip("tokenizer artifact not trained yet (`gls tokenizer train`)")
     from tokenizers import Tokenizer
 
-    return Tokenizer.from_file(str(_artifact_path()))
+    return Tokenizer.from_file(str(tokenizer_artifact()))
 
 
 # --- constants: no artifact, no network needed ---------------------------------

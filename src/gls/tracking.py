@@ -1,11 +1,7 @@
 """Metric tracking: a JSONL file that is always the source of truth, plus an
 optional Weights & Biases mirror.
 
-``_log`` used to be a bare function in ``train.py`` whose docstring promised a
-W&B mirror would be "one conditional here". This is that conditional, lifted out
-so the loop stays readable. The JSONL contract is unchanged - one JSON object
-per line, appended - so every tool that already reads ``runs/*/log.jsonl`` keeps
-working.
+The JSONL contract is one JSON object per line, appended, at ``runs/*/log.jsonl``.
 
 W&B is opt-in (``--wandb``) and best-effort: a missing API key or a network
 outage downgrades to file-only with a warning printed once. It never raises into

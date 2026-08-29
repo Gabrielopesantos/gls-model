@@ -1,4 +1,4 @@
-"""Phase 0 architecture checks (verification.md -> "Model architecture").
+"""Architecture checks (verification.md -> "Model architecture").
 
 These run in seconds on CPU. The Llama round-trip skips when `transformers`
 (the `eval` dependency group) is absent, mirroring test_tokenizer.py's
@@ -118,6 +118,13 @@ def test_lm_head_tied_to_embedding():
     assert model.lm_head.weight is model.embed_tokens.weight
 
 
+def test_from_dict_roundtrips_and_rejects_unknown_keys():
+    cfg = PRESETS["small"]
+    assert ModelConfig.from_dict(cfg.to_dict()) == cfg
+    with pytest.raises(ValueError, match="unknown ModelConfig keys"):
+        ModelConfig.from_dict({**cfg.to_dict(), "n_experts": 8})
+
+
 def test_attention_bias_flag_adds_qkv_bias():
     cfg = replace(PRESETS["small"], attention_bias=True)
     model = GLSModel(cfg)
@@ -195,7 +202,7 @@ def test_attention_is_causal():
 
 def test_llama_roundtrip_is_a_rename():
     pytest.importorskip("transformers")
-    from transformers import LlamaConfig, LlamaForCausalLM
+    from transformers import LlamaConfig, LlamaForCausalLM  # pyright: ignore[reportMissingImports]
 
     cfg = replace(PRESETS["small"], vocab=512, n_layers=2, max_seq_len=64)
     model = GLSModel(cfg).eval()
@@ -210,8 +217,9 @@ def test_llama_roundtrip_is_a_rename():
     with torch.no_grad():
         ours = model(ids)[0]
         theirs = lmodel(ids).logits
-    # fp32, same weights, pure rename -> they match. Formal tolerance is Phase 2's;
-    # this is the early warning that the rotate_half RoPE layout is right.
+    # fp32, same weights, pure rename -> they match. Formal tolerance belongs to
+    # the inference gate; this is the early warning that the rotate_half RoPE
+    # layout is right.
     assert torch.allclose(ours, theirs, atol=1e-4, rtol=1e-4)
 
 
@@ -239,6 +247,7 @@ def test_training_reduces_loss(tmp_path):
     with torch.no_grad():
         start_loss = model(x, y)[1].item()
 
+    loss = None
     for _ in range(80):
         x, y = data.batch(16, "cpu")
         _, loss = model(x, y)
@@ -246,19 +255,19 @@ def test_training_reduces_loss(tmp_path):
         loss.backward()
         opt.step()
 
-    assert loss.item() < start_loss - 1.0
+    assert loss is not None and loss.item() < start_loss - 1.0
 
 
 # --- checkpoint round-trip -------------------------------------------
 
 
 def test_checkpoint_roundtrip(tmp_path):
-    from gls.train import load_checkpoint, save_checkpoint
+    from gls.checkpoint import load_model_dir, save_model_dir
 
     cfg = _tiny_cfg()
     model = GLSModel(cfg)
-    save_checkpoint(model, tmp_path / "ckpt", step=42)
-    restored = load_checkpoint(tmp_path / "ckpt")
+    save_model_dir(model, tmp_path / "ckpt", step=42)
+    restored = load_model_dir(tmp_path / "ckpt")
 
     assert restored.cfg == cfg
     for (n, a), (_, b) in zip(model.named_parameters(), restored.named_parameters(), strict=True):

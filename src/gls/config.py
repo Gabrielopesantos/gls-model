@@ -1,20 +1,15 @@
-"""Dataclass <-> argparse <-> TOML glue.
-
-A run config is a plain dataclass (see ``TrainConfig`` in ``gls.train``). This
-module turns that one definition into a CLI and a file format so a field is
-declared exactly once:
+"""Dataclass <-> argparse <-> TOML glue: one dataclass definition becomes a CLI
+and a file format so a field is declared exactly once.
 
     parser = argparse.ArgumentParser()
     add_dataclass_args(parser, TrainConfig)
     cfg = resolve(TrainConfig, parser, argv)
 
 Precedence, low to high: dataclass defaults < ``--config file.toml`` < explicit
-CLI flags. Only flags the user actually passed override the file, so
-``--config foo.toml --lr 1e-4`` does the obvious thing.
+CLI flags.
 
 ``ModelConfig`` deliberately does *not* go through here - its fields are an
-architecture contract carried in the checkpoint, not run knobs, and the three
-``PRESETS`` are the only sanctioned combinations.
+architecture contract carried in the checkpoint, not run knobs.
 """
 
 from __future__ import annotations

@@ -1,11 +1,11 @@
-# Phase 1 development-tier pretrain: `medium` (~303M) on FineWeb-Edu.
+# Development-tier pretrain: `medium` (~303M) on FineWeb-Edu.
 # Numbers here are a starting point, not a tuned recipe - adjust `steps` and
 # `lr` once the loss curve on the real corpus is visible in W&B.
 #
-#   python -m gls.data prepare --corpus fineweb-edu --split train --shard-tokens 100_000_000
-#   python -m gls.train --config configs/medium-fineweb.toml --wandb
+#   gls data prepare --corpus fineweb-edu --split train --shard-tokens 100_000_000
+#   gls train --config configs/medium-fineweb.toml --wandb
 #   # resume after a kill:
-#   python -m gls.train --config configs/medium-fineweb.toml --resume auto --wandb
+#   gls train --config configs/medium-fineweb.toml --resume auto --wandb
 
 tier = "medium"
 corpus = "fineweb-edu"

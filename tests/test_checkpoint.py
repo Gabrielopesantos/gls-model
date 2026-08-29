@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import json
 
+import numpy as np
+import pytest
 import torch
 
 from gls.checkpoint import CKPT_SUBDIR, TrainerState, latest_dir, resolve_resume, save
+from gls.data import PackedData
 from gls.model import PRESETS, GLSModel
 from gls.train import TrainConfig, lr_at
+from gls.trainer import Runtime, Trainer
 
 
 def _tiny():
@@ -73,7 +77,8 @@ def test_resolve_resume_auto(tmp_path):
     opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
     gen = torch.Generator().manual_seed(0)
     save(tmp_path, 5, model, _state(5, opt, gen), keep_last=3)
-    assert resolve_resume(tmp_path, "auto").name == "step-000005"
+    resumed = resolve_resume(tmp_path, "auto")
+    assert resumed is not None and resumed.name == "step-000005"
 
 
 def test_state_restores_optimizer_and_sampler(tmp_path):
@@ -92,14 +97,16 @@ def test_state_restores_optimizer_and_sampler(tmp_path):
     # what gen produces from here is the continuation a resume must reproduce
     expected = torch.randint(0, 100, (8,), generator=gen).tolist()
 
-    _, state = load(latest_dir(tmp_path))
+    ckpt = latest_dir(tmp_path)
+    assert ckpt is not None
+    _, state = load(ckpt)
     assert state.step == 3
     gen2 = torch.Generator()
     state.restore_rng(gen2)
     assert torch.randint(0, 100, (8,), generator=gen2).tolist() == expected
 
     # optimizer moments came back too
-    _, restored_state = load(latest_dir(tmp_path))
+    _, restored_state = load(ckpt)
     assert restored_state.optimizer["state"]
 
 
@@ -108,3 +115,42 @@ def test_lr_schedule_is_step_addressable():
     cfg = TrainConfig(lr=1e-3, warmup_steps=10, steps=100)
     assert lr_at(400, cfg) == lr_at(400, cfg)
     assert lr_at(5, cfg) < lr_at(10, cfg)  # still warming up
+
+
+def test_trainer_resume_reproduces_uninterrupted_run(tmp_path):
+    """The Model/Trainer split's load-bearing property: 2 steps + save + resume +
+    2 steps lands on the same losses as 4 steps straight through."""
+    cfg = TrainConfig(steps=4, batch_size=2, grad_accum=1, block_size=16, warmup_steps=1, seed=0)
+    rt = Runtime.resolve("cpu")
+
+    period = np.tile(np.arange(32, dtype=np.uint16), 2_000)
+    bin_path = tmp_path / "toy.bin"
+    period.tofile(bin_path)
+
+    def run(trainer, gen, lo, hi):
+        data = PackedData(bin_path, block_size=16)
+        out = []
+        for step in range(lo, hi):
+            trainer.set_lr(lr_at(step, cfg))
+            out.append(trainer.train_step(data, gen)[0])
+        return out
+
+    torch.manual_seed(0)
+    straight = run(Trainer.fresh(_tiny(), cfg, rt), torch.Generator().manual_seed(0), 0, 4)
+
+    torch.manual_seed(0)
+    part = Trainer.fresh(_tiny(), cfg, rt)
+    gen = torch.Generator().manual_seed(0)
+    run(part, gen, 0, 2)
+    part.save(
+        tmp_path / "r", 2, gen, PackedData(bin_path, block_size=16), val_loss=None, best_val=None
+    )
+
+    ckpt = latest_dir(tmp_path / "r")
+    assert ckpt is not None
+    gen_r = torch.Generator()
+    resumed, state = Trainer.resume(ckpt, cfg, rt, gen_r)  # restores gen_r in place
+    assert state.step == 2
+    tail = run(resumed, gen_r, 2, 4)
+
+    assert tail == pytest.approx(straight[2:], rel=1e-4)
