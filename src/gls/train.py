@@ -9,7 +9,10 @@ from __future__ import annotations
 
 import json
 import math
+import signal
+import subprocess
 import sys
+import threading
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -58,8 +61,13 @@ class TrainConfig:
     log_interval: int = _f("steps between train-metric rows", default=10)
     eval_interval: int = _f("steps between eval passes", default=250)
     eval_iters: int = _f("batches per eval pass", default=50)
+    patience: int = _f("stop after N evals with no val improvement; 0 disables", default=0)
+    min_improvement: float = _f("val-loss drop that counts as an improvement", default=0.0)
     ckpt_interval: int = _f("steps between checkpoints", default=1_000)
     keep_last: int = _f("checkpoints to retain (best is always kept)", default=3)
+    sync_cmd: str | None = _f(
+        "shell command run after each checkpoint save; {ckpt}/{run} substituted", default=None
+    )
 
     resume: str | None = _f("'auto', a checkpoint dir, or unset", default=None)
     init_from: str | None = _f(
@@ -200,54 +208,141 @@ def train(cfg: TrainConfig) -> Path:
     tokens_per_step = cfg.batch_size * cfg.grad_accum * block_size
     t0 = time.time()
     last_eval: dict[str, float] = {}
+    stale_evals = 0  # consecutive evals with no significant val improvement
+    sync_proc: subprocess.Popen | None = None
 
     def _due(step: int, interval: int) -> bool:
         return (step + 1) % interval == 0 or step == cfg.steps - 1
 
-    for step in range(start_step, cfg.steps):
-        lr = lr_at(step, cfg)
-        trainer.set_lr(lr)
+    def _sync(ckpt_dir: Path) -> None:
+        """Fire ``cfg.sync_cmd`` for a just-written checkpoint. Non-blocking and
+        best-effort: a rented box needs each checkpoint copied off its ephemeral
+        disk, but a slow or failing upload must never reach into the loop - same
+        contract ``gls.tracking`` gives W&B. One upload in flight at a time; a
+        slow one skips a checkpoint rather than piling processes up."""
+        nonlocal sync_proc
+        if not cfg.sync_cmd:
+            return
+        if sync_proc is not None and sync_proc.poll() is None:
+            _note("sync_cmd from the previous checkpoint still running; skipping this one")
+            return
+        cmd = cfg.sync_cmd.format(ckpt=str(ckpt_dir), run=str(run_dir))
+        try:
+            sync_proc = subprocess.Popen(cmd, shell=True)
+        except OSError as exc:
+            _note(f"sync_cmd failed to launch: {exc}")
 
-        step_t0 = time.time()
-        loss_val, grad_norm = trainer.train_step(data, sampler_gen)
+    def _checkpoint(step_after: int, val_now: float | None) -> None:
+        nonlocal best_val
+        if val_now is not None and (best_val is None or val_now < best_val):
+            best_val = val_now
+        ckpt = trainer.save(
+            run_dir, step_after, sampler_gen, data, val_loss=val_now, best_val=best_val
+        )
+        _sync(ckpt)
 
-        if not math.isfinite(loss_val):
-            run.event({"event": "abort", "step": step, "reason": f"non-finite loss {loss_val}"})
-            raise SystemExit(f"non-finite loss at step {step}: {loss_val}")
+    # SIGTERM (the preemption / `scancel` signal) checkpoints and exits through
+    # the normal teardown. SIGINT keeps its hard-abort default on purpose - a
+    # Ctrl-C at the keyboard is "stop now", not "wrap up".
+    stop = threading.Event()
+    prev_sigterm = signal.getsignal(signal.SIGTERM)
+    signal.signal(signal.SIGTERM, lambda *_: stop.set())
 
-        dt = time.time() - step_t0
-        is_first = step == start_step
+    outcome = "done"
+    last_step = start_step
+    try:
+        for step in range(start_step, cfg.steps):
+            last_step = step
+            lr = lr_at(step, cfg)
+            trainer.set_lr(lr)
 
-        if _due(step, cfg.log_interval) and not is_first:
-            run.log(
-                {
-                    "train/loss": round(loss_val, 4),
-                    "train/lr": lr,
-                    "train/grad_norm": round(grad_norm, 3),
-                    "train/tokens_per_sec": round(tokens_per_step / dt),
-                    "elapsed_s": round(time.time() - t0, 1),
-                },
-                step=step,
-            )
+            step_t0 = time.time()
+            loss_val, grad_norm = trainer.train_step(data, sampler_gen)
 
-        if _due(step, cfg.eval_interval):
-            last_eval = trainer.eval_step(data, step)
-            run.log({f"eval/{k}_loss": round(v, 4) for k, v in last_eval.items()}, step=step)
-            _note(
-                f"step {step:>6}  loss {loss_val:6.4f}  eval {last_eval}  "
-                f"lr {lr:.2e}  gnorm {grad_norm:5.2f}"
-            )
+            if not math.isfinite(loss_val):
+                run.event({"event": "abort", "step": step, "reason": f"non-finite loss {loss_val}"})
+                raise SystemExit(f"non-finite loss at step {step}: {loss_val}")
 
-        if _due(step, cfg.ckpt_interval):
-            val_now = last_eval.get("val")
-            if val_now is not None and (best_val is None or val_now < best_val):
-                best_val = val_now
-            trainer.save(run_dir, step + 1, sampler_gen, data, val_loss=val_now, best_val=best_val)
+            dt = time.time() - step_t0
+            is_first = step == start_step
+            done_steps = step - start_step + 1
+            eta_s = (time.time() - t0) / done_steps * (cfg.steps - step - 1)
 
-    run.event({"event": "done", "total_s": round(time.time() - t0, 1), "step": cfg.steps})
+            if _due(step, cfg.log_interval) and not is_first:
+                run.log(
+                    {
+                        "train/loss": round(loss_val, 4),
+                        "train/lr": lr,
+                        "train/grad_norm": round(grad_norm, 3),
+                        "train/tokens_per_sec": round(tokens_per_step / dt),
+                        "train/eta_s": round(eta_s),
+                        "elapsed_s": round(time.time() - t0, 1),
+                    },
+                    step=step,
+                )
+
+            saved_after: int | None = None
+
+            if _due(step, cfg.eval_interval):
+                last_eval = trainer.eval_step(data, step)
+                run.log({f"eval/{k}_loss": round(v, 4) for k, v in last_eval.items()}, step=step)
+                _note(
+                    f"step {step:>6}  loss {loss_val:6.4f}  eval {last_eval}  "
+                    f"lr {lr:.2e}  gnorm {grad_norm:5.2f}  eta {eta_s / 60:.0f}m"
+                )
+                val_now = last_eval.get("val")
+                if val_now is not None:
+                    if best_val is None or val_now < best_val - cfg.min_improvement:
+                        stale_evals = 0
+                    else:
+                        stale_evals += 1
+                    # Save on any improvement, not only at ckpt_interval marks: a
+                    # best val landing between two marks must still reach
+                    # best.json (checkpoint.save's own compare only runs when we
+                    # actually write a checkpoint).
+                    if best_val is None or val_now < best_val:
+                        _checkpoint(step + 1, val_now)
+                        saved_after = step + 1
+
+            if _due(step, cfg.ckpt_interval) and saved_after != step + 1:
+                _checkpoint(step + 1, last_eval.get("val"))
+                saved_after = step + 1
+
+            if cfg.patience and stale_evals >= cfg.patience:
+                outcome = "early_stop"
+                break
+
+            if stop.is_set():
+                if saved_after != step + 1:
+                    _checkpoint(step + 1, last_eval.get("val"))
+                outcome = "sigterm"
+                break
+    finally:
+        signal.signal(signal.SIGTERM, prev_sigterm)
+
+    total_s = round(time.time() - t0, 1)
+    if outcome == "early_stop":
+        run.event(
+            {
+                "event": "early_stop",
+                "step": last_step + 1,
+                "total_s": total_s,
+                "stale_evals": stale_evals,
+            }
+        )
+        _note(f"early stop at step {last_step}: {stale_evals} evals with no val improvement")
+    elif outcome == "sigterm":
+        run.event({"event": "sigterm", "step": last_step + 1, "total_s": total_s})
+        _note(f"SIGTERM at step {last_step}: checkpointed, exiting clean")
+    else:
+        run.event({"event": "done", "total_s": total_s, "step": cfg.steps})
+
+    if sync_proc is not None:
+        _note("waiting on the final checkpoint sync...")
+        sync_proc.wait()
     run.finish()
     data.close()
-    _note(f"done in {time.time() - t0:.1f}s -> {run_dir}")
+    _note(f"done in {total_s}s -> {run_dir}")
     return run_dir
 
 

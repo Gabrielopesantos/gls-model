@@ -30,5 +30,17 @@ eval_iters = 100
 ckpt_interval = 1000
 keep_last = 3
 
+# Stop paying for steps that are not moving the holdout. 8 evals x 500 steps = a
+# 4000-step (20%) flat stretch ends the run. min_improvement filters eval noise
+# so a genuinely flat curve is what trips it. patience = 0 disables.
+patience = 8
+min_improvement = 0.005
+
+# Checkpoints land on the instance's ephemeral disk - copy each one off-box as it
+# is written. {ckpt} is the step dir just saved, {run} the run dir. Best-effort
+# and non-blocking: a failed upload warns and training continues. The remote copy
+# is free to accumulate past keep_last - that is the point of having it.
+# sync_cmd = "rsync -a --mkpath {ckpt} REMOTE:gls-runs/medium-fineweb/"
+
 run_name = "medium-fineweb"
 wandb_project = "gls-model"
