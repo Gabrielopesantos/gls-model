@@ -115,6 +115,25 @@ def _cmd_eval(argv: list[str]) -> int:
     return 0
 
 
+def _cmd_model(argv: list[str]) -> int:
+    from gls import viz
+
+    p = argparse.ArgumentParser(prog="gls model", description="inspect a tier's architecture")
+    sub = p.add_subparsers(dest="cmd", required=True)
+    s = sub.add_parser("summary", help="per-layer table + param / activation / KV sizes")
+    s.add_argument("--tier", default="medium", choices=list(PRESETS))
+    s.add_argument("--batch-size", type=int, default=8)
+    s.add_argument("--block-size", type=int, default=None, help="default: tier max_seq_len")
+    s.add_argument(
+        "--graph", default=None, help="also write a module diagram here (needs graphviz)"
+    )
+    a = p.parse_args(argv)
+    viz.summary(a.tier, batch_size=a.batch_size, block_size=a.block_size)
+    if a.graph:
+        viz.graph(a.tier, a.graph, block_size=a.block_size)
+    return 0
+
+
 def _cmd_env(argv: list[str]) -> int:
     argparse.ArgumentParser(prog="gls env", description="print torch/CUDA/device facts").parse_args(
         argv
@@ -138,6 +157,7 @@ _COMMANDS = {
     "data": _cmd_data,
     "tokenizer": _cmd_tokenizer,
     "eval": _cmd_eval,
+    "model": _cmd_model,
     "env": _cmd_env,
 }
 
