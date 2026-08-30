@@ -54,6 +54,7 @@ class TrainConfig:
     weight_decay: float = _f("AdamW weight decay (2D params only)", default=0.1)
     grad_clip: float = _f("grad-norm clip; <=0 disables", default=1.0)
     betas: tuple[float, float] = _f("AdamW betas", default=(0.9, 0.95))
+    compile: bool = _f("wrap the forward pass in torch.compile", default=False)
 
     stream: bool = _f("tokenize from the HF stream instead of packed shards", default=False)
     val_fraction: float = _f("carve this tail fraction of train as val", default=0.0)

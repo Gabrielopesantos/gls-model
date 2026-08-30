@@ -21,6 +21,9 @@ warmup_steps = 300
 weight_decay = 0.1
 grad_clip = 1.0
 
+# Static step shapes, so the forward compiles once. First step pays the trace.
+compile = true
+
 # fineweb-edu has no upstream val split; carve a tail holdout
 val_fraction = 0.005
 
