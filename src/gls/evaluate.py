@@ -3,8 +3,8 @@
 * ``perplexity`` - exp of the mean response-token cross-entropy on a held-out
   instruction split. Run it against the pretrained checkpoint and again against
   the fine-tuned one; the drop is the headline number.
-* ``harness`` - score a checkpoint on ``lm-eval`` tasks (``lambada_openai``/
-  ``arc_easy``/``piqa``) through a tiny ``lm_eval.api.model.LM`` adapter over
+* ``harness`` - score a checkpoint on ``lm-eval`` tasks (``lambada_openai``,
+  ``arc_easy``, ``piqa``) through a tiny ``lm_eval.api.model.LM`` adapter over
   ``GLSModel.forward``. Teacher-forced sequence scoring only - no decode loop, no
   KV cache. Runs on our own forward pass, so no HF port and no Triton.
 * ``export_hf`` - write a ``transformers``-loadable directory via the Llama
@@ -157,7 +157,7 @@ def _make_adapter(ckpt: str | Path, device: str, batch_size: int):
     rt = Runtime.resolve(device)
     model = checkpoint.load_model_dir(checkpoint.resolve_init(str(ckpt)), rt.device)
     model.eval()
-    tok = data._load_tokenizer()
+    tok = data.load_tokenizer()
     eot = data._eot_id(tok)
     max_len = model.cfg.max_seq_len
 
@@ -207,7 +207,10 @@ def _make_adapter(ckpt: str | Path, device: str, batch_size: int):
             )
 
         def generate_until(self, requests, disable_tqdm: bool = False):
-            raise NotImplementedError("gls has no decode loop yet; harness tasks are scoring-only")
+            raise NotImplementedError(
+                "this adapter does teacher-forced scoring only; generation-style tasks are "
+                "not wired through it (the decode loop lives in gls.inference)"
+            )
 
     return _GLSAdapter()
 

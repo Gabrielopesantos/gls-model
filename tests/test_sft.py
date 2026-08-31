@@ -61,7 +61,7 @@ def test_encode_mask_boundary_is_exact(tok):
     head, _, resp = sft.render(_EXAMPLES[0], DOLLY)
     expect_prompt = (
         tok.encode(head, add_special_tokens=False).ids
-        + tok.encode(sft._ASSISTANT_OPEN, add_special_tokens=False).ids
+        + tok.encode(sft.ASSISTANT_OPEN, add_special_tokens=False).ids
     )
     assert ids[:prompt_len] == expect_prompt
     assert ids[prompt_len:] == tok.encode(resp, add_special_tokens=False).ids

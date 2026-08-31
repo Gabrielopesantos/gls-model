@@ -228,11 +228,21 @@ class Attention(nn.Module):
         k = k.repeat_interleave(self.n_rep, dim=1)
         v = v.repeat_interleave(self.n_rep, dim=1)
 
-        # is_causal is only correct when q and k span the same positions (prefill
-        # or a full forward). A single decode step against a longer cache attends
-        # everything and needs no mask.
-        is_causal = past_kv is None
-        out = F.scaled_dot_product_attention(q, k, v, is_causal=is_causal)
+        # Three shapes reach this line. Prefill from an empty cache: q and k span
+        # the same positions, is_causal handles it. A single decode step (T == 1)
+        # against a warm cache attends the whole cache and needs no mask. A
+        # multi-token prefill onto a warm cache - turn 2 of a chat - is the odd
+        # one out: the new tokens may see the entire cached prefix but only their
+        # own causal prefix among themselves, which is neither is_causal nor
+        # no mask. Build it explicitly (True == attend); `offset` is the cached
+        # length, computed above for RoPE.
+        if past_kv is not None and T > 1:
+            attend_prefix = torch.ones(T, offset, dtype=torch.bool, device=x.device)
+            causal = torch.ones(T, T, dtype=torch.bool, device=x.device).tril()
+            attn_mask = torch.cat((attend_prefix, causal), dim=1)
+            out = F.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask)
+        else:
+            out = F.scaled_dot_product_attention(q, k, v, is_causal=past_kv is None)
         out = out.transpose(1, 2).reshape(B, T, self.n_heads * self.head_dim)
         return self.o_proj(out), new_kv
 
@@ -355,6 +365,44 @@ class GLSModel(nn.Module):
                 ignore_index=-100,
             )
         return logits, loss
+
+    def forward_cached(
+        self,
+        input_ids: Tensor,
+        past_kvs: list[tuple[Tensor, Tensor]] | None = None,
+    ) -> tuple[Tensor, list[tuple[Tensor, Tensor]]]:
+        """Incremental forward for generation: run ``input_ids`` on top of the
+        per-layer keys and values in ``past_kvs`` and return ``(logits, new_kvs)``
+        where ``logits`` is ``(B, vocab)`` for the final position only and
+        ``new_kvs`` is the extended cache to pass to the next call.
+
+        This is the decode path; ``forward`` stays the training/scoring one. Not
+        ``torch.compile``d - the cache grows a position per step, so a compiled
+        version would retrace every call. A preallocated cache is what makes it
+        compilable.
+        """
+        B, T = input_ids.shape
+        offset = 0 if past_kvs is None else past_kvs[0][0].shape[2]
+        total = offset + T
+        if total > self.cfg.max_seq_len:
+            raise ValueError(f"context length {total} exceeds max_seq_len {self.cfg.max_seq_len}")
+
+        cos = self.rope_cos.to(dtype=torch.float32)
+        sin = self.rope_sin.to(dtype=torch.float32)
+
+        h = self.embed_tokens(input_ids)
+        new_kvs: list[tuple[Tensor, Tensor]] = []
+        for i, layer in enumerate(self.layers):
+            past = None if past_kvs is None else past_kvs[i]
+            h, kv = layer(h, cos, sin, past_kv=past, return_kv=True)
+            assert kv is not None  # return_kv=True
+            new_kvs.append(kv)
+
+        # Only the last position feeds sampling; normalise and project just that
+        # row rather than the whole T.
+        h = self.norm(h[:, -1:, :])
+        logits = self.lm_head(h)
+        return logits[:, -1, :], new_kvs
 
     def num_parameters(self, trainable_only: bool = True) -> int:
         """Tied weights are counted once (nn.Module.parameters dedupes)."""

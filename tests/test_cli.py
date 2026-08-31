@@ -10,7 +10,7 @@ from gls import cli
 def test_bare_invocation_lists_subcommands(capsys):
     with pytest.raises(SystemExit):
         cli.main([])
-    assert "{train,data,tokenizer,eval,model,env}" in capsys.readouterr().err
+    assert "{train,data,tokenizer,eval,model,chat,env}" in capsys.readouterr().err
 
 
 def test_train_help_exits_zero():

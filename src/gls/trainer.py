@@ -101,7 +101,7 @@ class Trainer:
         self.cfg = cfg
         self.rt = rt
         # torch.compile wraps the forward only. self.model stays the raw module,
-        # so save / param_groups / clip_grad_norm_ never see a `_orig_mod.`
+        # so save, param_groups and clip_grad_norm_ never see a `_orig_mod.`
         # prefix; the step shapes (batch_size x block_size) are static, so it
         # compiles once and never re-traces.
         self._fwd = torch.compile(model) if cfg.compile else model

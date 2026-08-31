@@ -3,12 +3,13 @@ module diagram (``torchview``), both driven straight off ``gls.model.PRESETS``.
 
 Neither library is a runtime dependency - they live in the ``viz`` group
 (``uv sync --group viz``), and each entry point fails with an install hint when
-its backend is missing, the same way ``gls.evaluate`` treats ``lm-eval`` /
+its backend is missing, the same way ``gls.evaluate`` treats ``lm-eval`` and
 ``transformers``.
 
-The point of the table is the activation estimate: the "Estimated Total Size"
-footer is what decides which Lambda instance a tier needs and what batch fits,
-without renting one to find out.
+This is the per-layer shape and parameter view. The instance-sizing number is
+the measured ``train/peak_mem_gib`` the loop logs, not torchinfo's "Estimated
+Total Size" footer, which overestimates the training residency (it sums every
+module output tensor and models neither autocast nor SDPA nor compile fusion).
 """
 
 from __future__ import annotations

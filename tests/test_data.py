@@ -85,7 +85,7 @@ class _FakeTok:
 
 def _patch_prepare(monkeypatch, tmp_path, n_docs):
     monkeypatch.setattr(gd.paths, "packed_dir", lambda: tmp_path)
-    monkeypatch.setattr(gd, "_load_tokenizer", lambda: _FakeTok())
+    monkeypatch.setattr(gd, "load_tokenizer", lambda: _FakeTok())
     monkeypatch.setattr(gd, "_eot_id", lambda tok: 0)
     # small encode chunk so the shard-flush threshold is crossed several times
     monkeypatch.setattr(gd, "_ENCODE_CHUNK", 5)

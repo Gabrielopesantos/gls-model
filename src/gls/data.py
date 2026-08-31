@@ -128,7 +128,9 @@ def resolve_source(corpus: str, split: str) -> Path | None:
 # --------------------------------------------------------------------------- #
 
 
-def _load_tokenizer():
+def load_tokenizer():
+    """The trained byte-level BPE artifact. Public: `gls.sft`, `gls.evaluate` and
+    `gls.chat` all need the same one, and the path resolution lives here."""
     from tokenizers import Tokenizer
 
     path = paths.tokenizer_artifact()
@@ -194,7 +196,7 @@ def prepare(
     for stale in itertools.chain(out_dir.glob(f"{split}-*.bin"), out_dir.glob(f"{split}-*.tmp")):
         stale.unlink()
 
-    tok = _load_tokenizer()
+    tok = load_tokenizer()
     eot = _eot_id(tok)
 
     ds, field = _open_stream(corpus, split)
@@ -424,7 +426,7 @@ class StreamingTokens:
         return {"_stream_docs": self.docs_consumed}
 
     def _run(self, skip_docs: int) -> None:
-        tok = _load_tokenizer()
+        tok = load_tokenizer()
         eot = _eot_id(tok)
         ds, field = _open_stream(self.corpus, "train")
         rows = itertools.islice(iter(ds), skip_docs, None)
