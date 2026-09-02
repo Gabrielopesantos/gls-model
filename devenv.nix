@@ -12,10 +12,8 @@
       enable = true;
       sync = {
         enable = true;
-        # dev + track (wandb) by default - per-step loss/LR curves are a
-        # standard part of a run now. The eval group (transformers, lm-eval)
-        # stays on-demand with `uv sync --group eval`.
-        groups = [ "dev" "track" ];
+        # dev + track (wandb) + infra (by default)
+        groups = [ "dev" "track" "infra" ];
       };
     };
 
@@ -41,6 +39,7 @@
   packages = [
     pkgs.nvitop
     pkgs.graphviz # `gls model summary --graph` (torchview) shells out to `dot`
+    pkgs.rclone
 
     # Large unfree download, and most nsight runs happen on
     # the rented GPU box rather than here.
