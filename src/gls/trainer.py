@@ -235,5 +235,11 @@ class Trainer:
             best_val=best_val,
         )
         return checkpoint.save(
-            run_dir, step, self.model, state, val_loss=val_loss, keep_last=self.cfg.keep_last
+            run_dir,
+            step,
+            self.model,
+            state,
+            val_loss=val_loss,
+            keep_last=self.cfg.keep_last,
+            min_improvement=self.cfg.min_improvement,
         )

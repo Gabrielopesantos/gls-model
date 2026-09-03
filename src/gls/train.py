@@ -306,11 +306,18 @@ def train(cfg: TrainConfig) -> Path:
                         stale_evals = 0
                     else:
                         stale_evals += 1
-                    # Save on any improvement, not only at ckpt_interval marks: a
-                    # best val landing between two marks must still reach
-                    # best.json (checkpoint.save's own compare only runs when we
-                    # actually write a checkpoint).
-                    if best_val is None or val_now < best_val:
+                    # Save on a significant improvement, not only at
+                    # ckpt_interval marks: a best val landing between two marks
+                    # must still reach best.json (checkpoint.save's own compare
+                    # only runs when we actually write a checkpoint).
+                    #
+                    # min_improvement gates this the same way it gates the
+                    # patience counter above. Without it a bare `<` chases eval
+                    # noise: the medium-fineweb run picked step 17500 (2.8922)
+                    # over the fully-annealed step 20000 (2.8938) on 0.0016 nats,
+                    # handing every downstream deliverable a checkpoint that
+                    # never finished its cosine.
+                    if best_val is None or val_now < best_val - cfg.min_improvement:
                         _checkpoint(step + 1, val_now)
                         saved_after = step + 1
 
