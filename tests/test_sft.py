@@ -133,3 +133,36 @@ def test_sftdata_holdout_is_carved_by_example(sftdata):
     assert len(sftdata._val_idx) > 0
     total = len(sftdata._train_idx) + len(sftdata._val_idx)
     assert total == len(sftdata._ex)
+
+
+def test_sweep_covers_the_split_exactly_once(sftdata):
+    """The measurement path must be a census, not a sample. `batch` draws with
+    replacement, so a perplexity built on it depends on iters/batch_size/seed."""
+    seen = 0
+    for x, y in sftdata.sweep(2, "cpu", val=True):
+        assert x.shape == y.shape
+        seen += x.shape[0]
+    assert seen == len(sftdata._val_idx)
+
+
+def test_sweep_is_batch_size_invariant(sftdata):
+    """Same supervised tokens regardless of batching - the property that makes
+    two checkpoints comparable when they were scored at different batch sizes."""
+
+    def supervised(bs):
+        out = []
+        for x, y in sftdata.sweep(bs, "cpu", val=True):
+            live = y != sft.IGNORE_INDEX
+            out.append(torch.stack([y[live], x.roll(-1, dims=1)[live]]))
+        return torch.cat(out, dim=1)
+
+    a, b = supervised(1), supervised(3)
+    assert a.shape == b.shape
+    assert torch.equal(a.sort(dim=1).values, b.sort(dim=1).values)
+
+
+def test_sweep_is_deterministic_across_calls(sftdata):
+    first = [x.clone() for x, _ in sftdata.sweep(2, "cpu", val=True)]
+    second = [x.clone() for x, _ in sftdata.sweep(2, "cpu", val=True)]
+    assert len(first) == len(second)
+    assert all(torch.equal(p, q) for p, q in zip(first, second, strict=True))
