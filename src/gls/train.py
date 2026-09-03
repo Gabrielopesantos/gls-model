@@ -211,6 +211,7 @@ def train(cfg: TrainConfig) -> Path:
     last_eval: dict[str, float] = {}
     stale_evals = 0  # consecutive evals with no significant val improvement
     sync_proc: subprocess.Popen | None = None
+    sync_logged = False
 
     def _due(step: int, interval: int) -> bool:
         return (step + 1) % interval == 0 or step == cfg.steps - 1
@@ -228,6 +229,16 @@ def train(cfg: TrainConfig) -> Path:
             _note("sync_cmd from the previous checkpoint still running; skipping this one")
             return
         cmd = cfg.sync_cmd.format(ckpt=str(ckpt_dir), run=str(run_dir))
+        nonlocal sync_logged
+        if not sync_logged:
+            # Log the resolved command once. A sync_cmd that hardcodes a run name
+            # instead of using {run} sends this run's checkpoints into another
+            # run's destination, and does it silently at every save - which is
+            # exactly how the medium-dolly-sft checkpoints ended up under the
+            # medium-fineweb prefix. Printing the first resolved command makes the
+            # destination visible in the log before the second checkpoint exists.
+            _note(f"sync_cmd -> {cmd}")
+            sync_logged = True
         try:
             sync_proc = subprocess.Popen(cmd, shell=True)
         except OSError as exc:
