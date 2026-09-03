@@ -1,4 +1,4 @@
-# Smoke test - reproduces the measured run (eval val loss 10.35 -> 1.836).
+# Smoke test.
 #
 #   gls data prepare --corpus tinystories --split train --limit 120000
 #   gls data prepare --corpus tinystories --split val   --limit 12000

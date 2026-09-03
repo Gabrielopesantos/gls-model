@@ -2,17 +2,7 @@
 choice with a measured bake-off against a spread of off-the-shelf tokenizers.
 
 Vocab is fixed at 32000 (128-aligned), one tokenizer for all three tiers -
-speculative decoding needs draft and target to share a vocab. Documented in
-``privatedocs/plan/model-sizes.md``.
-
-Subcommands::
-
-    gls tokenizer fetch      # cache a fixed FineWeb-Edu slice locally
-    gls tokenizer train      # train artifacts/tokenizer/tokenizer.json
-    gls tokenizer compare    # leaderboard: chars/token, own vs refs
-    gls tokenizer stats      # vocab coverage on the holdout
-    gls tokenizer sweep      # chars/token vs training-corpus size
-    gls tokenizer domains    # chars/token off-domain (code, other langs)
+speculative decoding needs draft and target to share a vocab.
 
 ``compare`` decides which artifact ships: own must beat the best 32k reference
 by >3% chars/token. A bigger-vocab tokenizer scoring higher on raw chars/token

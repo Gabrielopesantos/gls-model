@@ -13,16 +13,13 @@ Two sources, one sampling interface (``.batch(batch_size, device, val=...)``):
 * **Live stream (``--stream``).** ``StreamingTokens`` pulls
   ``load_dataset(..., streaming=True)``, tokenizes in a background thread, and
   packs into a rolling buffer. For corpora too large to land on local disk.
-  Resume is *approximate* here - it fast-forwards by document count, not by
+  Resume is approximate here - it fast-forwards by document count, not by
   token - so packed shards remain the choice for any run whose loss curve must
   survive a restart exactly.
 
 vocab 32000 fits ``uint16``. Documents are joined with the ``<|endoftext|>`` id.
 Exactly-once sharding across ranks is a distributed-training concern; the
 ``(rank, world_size)`` argument here is the seam for it and defaults to ``(0, 1)``.
-
-    gls data prepare --corpus tinystories --split train
-    gls data prepare --corpus fineweb-edu --split train --shard-tokens 100_000_000
 """
 
 from __future__ import annotations

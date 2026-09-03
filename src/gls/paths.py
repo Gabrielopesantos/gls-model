@@ -2,8 +2,7 @@
 from one root.
 
 The root is ``$GLS_ROOT`` when set, else the repository that contains this
-source file. Set the env var when the checkout is not the working directory - a
-non-editable install, a container, a rented GPU box.
+source file.
 """
 
 from __future__ import annotations

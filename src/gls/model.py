@@ -6,9 +6,6 @@ terms. Together these keep every preset expressible as a ``transformers``
 ``LlamaConfig``, so a greedy-decode equivalence gate gets a reference at
 matching shape. ``llama_config_dict``/``to_llama_state_dict`` are that
 converter, and they are a pure rename table by construction.
-
-Size is data, not code: one ``ModelConfig``, three named ``PRESETS``, no
-per-tier branches anywhere below.
 """
 
 from __future__ import annotations
@@ -47,7 +44,7 @@ class ModelConfig:
     rope_theta: float = 10_000.0
     rms_norm_eps: float = 1e-5
     tie_embeddings: bool = True
-    # Our presets are all biasless (matches LlamaConfig defaults, keeps the
+    # Presets are all biasless (matches LlamaConfig defaults, keeps the
     # Llama converter a rename). The flag exists because Qwen2/2.5 puts a bias
     # on q/k/v, and Qwen2.5-0.5B is a secondary-check candidate whose weights
     # would not otherwise load into this module.
@@ -95,8 +92,7 @@ class ModelConfig:
 _ALIASES: dict[str, str] = {}
 
 
-# Dimensions mirrored from privatedocs/plan/model-sizes.md#tiers. This is the
-# single source of truth for tier dimensions - gls.tokenizer's break-even print
+# This is the source of truth for tier dimensions - gls.tokenizer's break-even print
 # reads d_model/KV shape back from here rather than duplicating them.
 PRESETS: dict[str, ModelConfig] = {
     "small": ModelConfig(
@@ -315,7 +311,7 @@ class GLSModel(nn.Module):
         # never emitted by data.prepare, so they get no gradient; with tied
         # embeddings a random row would still emit spurious logits from the
         # output head. Zero them.
-        # (<|endoftext|>, row 0, *is* trained - it joins every document pair.)
+        # (<|endoftext|>, row 0, is trained - it joins every document pair.)
         with torch.no_grad():
             self.embed_tokens.weight[:N_SPECIAL].zero_()
 

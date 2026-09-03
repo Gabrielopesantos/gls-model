@@ -1,11 +1,8 @@
-"""Hand-written pretraining loop. No ``Trainer`` framework, no ``accelerate``:
-the LR schedule, the cadence gates, the logging and the teardown are all visible
-in ``train()`` below. The optimizer, the step and the eval pass live in
-``gls.trainer`` (``Trainer`` / ``Runtime``); the loop calls ``train_step`` /
-``eval_step`` / ``save`` and owns nothing else.
-
-    gls train --config configs/small-tinystories.toml
-    gls train --config configs/medium-fineweb.toml --resume auto
+"""Hand-written pretraining loop. The LR schedule, cadence gates, logging
+and the teardown are all visible in ``train()`` below.
+The optimizer, the step and the eval pass live in
+``gls.trainer`` (``Trainer``/``Runtime``); the loop calls ``train_step``/
+``eval_step``/``save`` and owns nothing else.
 """
 
 from __future__ import annotations
@@ -41,8 +38,8 @@ class TrainConfig:
     tier: str = _f("model preset", default="small")
     corpus: str = _f("corpus name (see gls.data.CORPORA)", default="tinystories")
     steps: int = _f("optimizer steps to run to", default=3_000)
-    # batch 16 x 8 accum x 512 ctx = 65k tokens/step. batch is deliberately
-    # modest: at vocab 32000 the cross-entropy logit buffer, not the 21.7M
+    # batch 16 x 8 accum x 512 ctx = 65k tokens/step. batch is modest:
+    # at vocab 32000 the cross-entropy logit buffer, not the 21.7M
     # weights, is what sets `small`'s memory on an 11.6 GiB card.
     batch_size: int = _f("micro-batch rows", default=16)
     grad_accum: int = _f("micro-batches per optimizer step", default=8)
@@ -77,8 +74,7 @@ class TrainConfig:
 
 def lr_at(step: int, cfg: TrainConfig) -> float:
     """Linear warmup, then cosine decay to ``min_lr_frac * lr``. A plain function
-    of the step - no torch scheduler object to hide the curve, and pure so a
-    resumed run lands on the same value."""
+    of the step and pure so a resumed run lands on the same value."""
     min_lr = cfg.lr * cfg.min_lr_frac
     if step < cfg.warmup_steps:
         return cfg.lr * (step + 1) / cfg.warmup_steps

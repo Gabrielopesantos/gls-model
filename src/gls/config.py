@@ -8,7 +8,7 @@ and a file format so a field is declared exactly once.
 Precedence, low to high: dataclass defaults < ``--config file.toml`` < explicit
 CLI flags.
 
-``ModelConfig`` deliberately does *not* go through here - its fields are an
+``ModelConfig`` does not go through here. Its fields are an
 architecture contract carried in the checkpoint, not run knobs.
 """
 
@@ -26,7 +26,9 @@ _SENTINEL = argparse.SUPPRESS
 
 
 def _unwrap_optional(tp: Any) -> tuple[Any, bool]:
-    """``X | None`` -> ``(X, True)``; anything else -> ``(tp, False)``."""
+    """``X | None`` -> ``(X, True)``;
+    anything else -> ``(tp, False)``.
+    """
     if get_origin(tp) in (typing.Union, types.UnionType):
         args = [a for a in get_args(tp) if a is not type(None)]
         if len(args) == 1:
@@ -41,11 +43,12 @@ def _field_flag(name: str) -> str:
 def add_dataclass_args(parser: argparse.ArgumentParser, cls: type) -> None:
     """Add one CLI flag per dataclass field.
 
-    ``int``/``float``/``str`` map straight through; ``bool`` becomes a
-    ``--flag``/``--no-flag`` pair; ``X | None`` becomes a nullable flag;
-    ``tuple[T, T]`` becomes ``nargs=2``. Every flag defaults to a sentinel so
-    ``resolve`` can tell "passed" from "left alone". Help text comes from
-    ``field.metadata["help"]``.
+    ``int``/``float``/``str`` map straight through;
+    ``bool`` becomes a ``--flag``/``--no-flag`` pair;
+    ``X | None`` becomes a nullable flag;
+    ``tuple[T, T]`` becomes ``nargs=2``;
+    Every flag defaults to a sentinel so ``resolve`` can tell "passed"
+    from "left alone". Help text comes from ``field.metadata["help"]``.
     """
     hints = typing.get_type_hints(cls)
     for f in dataclasses.fields(cls):
@@ -99,7 +102,7 @@ def load_toml(path: str | Path, cls: type) -> dict[str, Any]:
 
 
 def resolve(cls: type, parser: argparse.ArgumentParser, argv: list[str] | None = None) -> Any:
-    """Merge dataclass defaults, an optional ``--config`` TOML, and explicit CLI
+    """Merge dataclass defaults, an optional `--config` TOML, and explicit CLI
     flags into an instance of ``cls``.
 
     ``parser`` must already have been through ``add_dataclass_args`` and must

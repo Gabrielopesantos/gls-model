@@ -1,14 +1,8 @@
 """The ``gls`` command line.
 
-All argparse construction lives here. The library modules (``gls.train``,
-``gls.data``, ``gls.tokenizer``, ``gls.env``) expose plain functions; this is
-the only place a CLI-shaped string becomes a domain call, and the only place
+All argparse construction lives here. The library modules expose plain functions;
+this is the only place a CLI-shaped string becomes a domain call, and the only place
 that hard-exits the interpreter.
-
-    gls train     --config configs/small-tinystories.toml
-    gls data      prepare --corpus tinystories --split train
-    gls tokenizer compare
-    gls env
 """
 
 from __future__ import annotations

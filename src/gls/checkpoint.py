@@ -4,13 +4,12 @@ A checkpoint is a directory ``checkpoints/step-NNNNNN/`` holding:
 
 * ``model.safetensors`` + ``config.json`` - weights plus the architecture dims,
   loadable on their own by ``load_model_dir`` and by the Llama converter. This
-  pair is the deliverable a checkpoint *is*.
+  pair is the deliverable a checkpoint is.
 * ``trainer.pt`` - everything else needed to continue the run byte-for-byte:
   optimizer moments, the step counter, CPU + CUDA RNG, the data sampler's
   generator state, and the resolved ``TrainConfig`` dict.
 
-``checkpoints/latest.json`` and ``checkpoints/best.json`` are pointer files (not
-symlinks - a killed ``rename`` is easier to reason about than a dangling link).
+``checkpoints/latest.json`` and ``checkpoints/best.json`` are pointer files.
 Saves are written to a ``.tmp`` sibling and renamed, so an interrupted save
 never leaves a half-written directory that ``latest.json`` references.
 """

@@ -1,23 +1,4 @@
-"""From-scratch decoder-only transformer: training and (later) inference infra.
-
-Flat layout, one concept per file - the module list is the architecture diagram:
-
-    model       GLSModel, ModelConfig, PRESETS - architecture + forward, no optimizer
-    trainer     Trainer, Runtime            - the optimizer, the step, the eval pass
-    train       TrainConfig, train, lr_at   - the hand-written loop
-    data        PackedData, StreamingTokens, TokenSource
-    tokenizer   byte-level BPE + the bake-off
-    checkpoint  save/load, rotation, resume
-    tracking    JSONL metrics + optional W&B mirror
-    config      dataclass <-> argparse <-> TOML
-    paths       one root, every on-disk location
-    env         torch/CUDA/device facts
-    cli         the `gls` command (argparse lives here, nowhere else)
-
-The names below are re-exported lazily (PEP 562): ``from gls import Trainer``
-works, but ``import gls.model`` still does not drag in the training stack, so
-inference code stays optimizer-free.
-"""
+# From-scratch decoder-only transformer: training and (later) inference infra.
 
 from __future__ import annotations
 

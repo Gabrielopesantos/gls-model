@@ -7,9 +7,6 @@ W&B is opt-in (``--wandb``) and best-effort: a missing API key or a network
 outage downgrades to file-only with a warning printed once. It never raises into
 the training loop. The W&B run id is persisted in the run dir so ``--resume``
 reattaches to the same curve instead of drawing a second one.
-
-Named ``tracking`` rather than ``logging`` on purpose - a module named
-``gls.logging`` shadows the stdlib inside the package.
 """
 
 from __future__ import annotations

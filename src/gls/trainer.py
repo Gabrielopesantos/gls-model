@@ -5,10 +5,6 @@ no optimizer in sight. ``Trainer`` is that model plus the AdamW state, the
 resolved device/autocast ``Runtime``, and the three verbs the loop calls:
 ``train_step``, ``eval_step``, ``save``. The loop itself - schedule, cadence,
 logging - stays in ``gls.train`` where every mechanic is visible.
-
-Keeping the split means the inference path (``gls.model`` +
-``gls.checkpoint.load_model_dir``) never imports anything that carries optimizer
-state or gradient bookkeeping.
 """
 
 from __future__ import annotations

@@ -2,7 +2,7 @@
 
 Backs ``gls env``, and is called at the start of every training or serving run
 so the exact torch/CUDA/device combination ends up in the run log alongside the
-loss curve. The human-readable rendering lives in ``gls.cli``.
+loss curve.
 """
 
 from __future__ import annotations
