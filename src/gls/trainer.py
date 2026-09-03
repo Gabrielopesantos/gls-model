@@ -183,15 +183,27 @@ class Trainer:
         return loss_accum.item(), grad_norm
 
     @torch.no_grad()
-    def eval_step(self, data: TokenSource, step: int) -> dict[str, float]:
-        """Mean loss over ``eval_iters`` batches, on train and (if present) val.
+    def eval_step(self, data: TokenSource) -> dict[str, float]:
+        """Mean loss over ``eval_iters`` batches of ``eval_batch_size`` rows
+        (default ``batch_size``), on train and (if present) val.
 
-        A per-step generator: eval is reproducible and never touches the training
-        sample stream, so resume determinism does not depend on the eval cadence.
+        A fixed subsample of each split, not a census. The generator is seeded
+        with a constant, so every eval scores the identical batches and the val
+        curve is a comparison across steps rather than a fresh random draw each
+        time - which is what let eval noise (±0.08 nats on the Dolly holdout)
+        drive ``best.json`` before this was pinned. It is separate from the
+        training sampler, so eval never perturbs the training stream and resume
+        determinism does not depend on the eval cadence. The full-holdout census
+        is ``gls eval ppl`` (``gls.evaluate.perplexity``).
+
+        ``eval_batch_size`` exists so that cutting ``batch_size`` for a memory
+        reason - the SFT OOM fix took it 16 -> 4 - does not silently shrink the
+        eval sample with it.
         """
         cfg = self.cfg
         self.model.eval()
-        gen = torch.Generator().manual_seed(cfg.seed + 1_000_003 * step)
+        eval_bs = cfg.eval_batch_size or cfg.batch_size
+        gen = torch.Generator().manual_seed(cfg.seed + 999)
         out: dict[str, float] = {}
         splits = [("train", False)]
         if data.has_val:
@@ -200,7 +212,7 @@ class Trainer:
             total = torch.zeros((), device=self.rt.device)
             for _ in range(cfg.eval_iters):
                 x, y = data.batch(
-                    cfg.batch_size,
+                    eval_bs,
                     self.rt.device,
                     val=is_val,
                     generator=gen,

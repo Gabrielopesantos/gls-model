@@ -62,6 +62,11 @@ class TrainConfig:
     log_interval: int = _f("steps between train-metric rows", default=10)
     eval_interval: int = _f("steps between eval passes", default=250)
     eval_iters: int = _f("batches per eval pass", default=50)
+    eval_batch_size: int | None = _f(
+        "rows per eval batch; default = batch_size. Set it so the eval sample "
+        "size stops tracking a batch_size change made for a memory reason.",
+        default=None,
+    )
     patience: int = _f("stop after N evals with no val improvement; 0 disables", default=0)
     min_improvement: float = _f("val-loss drop that counts as an improvement", default=0.0)
     ckpt_interval: int = _f("steps between checkpoints", default=1_000)
@@ -207,6 +212,11 @@ def train(cfg: TrainConfig) -> Path:
     )
 
     tokens_per_step = cfg.batch_size * cfg.grad_accum * block_size
+    # train/mfu: achieved FLOP/s as a fraction of the card's dense bf16 peak.
+    # Logged only when the peak is known (env._PEAK_BF16_FLOPS) - a guessed peak
+    # would make the number meaningless.
+    flops_per_token = trainer.model.flops_per_token(block_size)
+    peak_flops = env.peak_bf16_flops() if rt.is_cuda else None
     t0 = time.time()
     last_eval: dict[str, float] = {}
     stale_evals = 0  # consecutive evals with no significant val improvement
@@ -309,12 +319,14 @@ def train(cfg: TrainConfig) -> Path:
                     row["train/peak_mem_gib"] = round(
                         torch.cuda.max_memory_allocated() / 1024**3, 3
                     )
+                if peak_flops is not None:
+                    row["train/mfu"] = round(flops_per_token * tokens_per_step / dt / peak_flops, 4)
                 run.log(row, step=step)
 
             saved_after: int | None = None
 
             if _due(step, cfg.eval_interval):
-                last_eval = trainer.eval_step(data, step)
+                last_eval = trainer.eval_step(data)
                 run.log({f"eval/{k}_loss": round(v, 4) for k, v in last_eval.items()}, step=step)
                 _note(
                     f"step {step:>6}  loss {loss_val:6.4f}  eval {last_eval}  "

@@ -184,6 +184,63 @@ def test_trainer_resume_reproduces_uninterrupted_run(tmp_path):
     assert tail == pytest.approx(straight[2:], rel=1e-4)
 
 
+def _toy_bin(tmp_path):
+    period = np.tile(np.arange(32, dtype=np.uint16), 2_000)
+    p = tmp_path / "toy.bin"
+    period.tofile(p)
+    return p
+
+
+def test_eval_step_is_a_fixed_subsample_across_calls(tmp_path):
+    """The in-loop eval scores the same batches every call - so the val curve is
+    a comparison across steps, not a fresh random draw each time (which is what
+    let eval noise drive best.json before defect 4)."""
+    cfg = TrainConfig(
+        steps=10,
+        batch_size=2,
+        grad_accum=1,
+        block_size=16,
+        eval_iters=3,
+        val_fraction=0.3,
+        seed=0,
+    )
+    trainer = Trainer.fresh(_tiny(), cfg, Runtime.resolve("cpu"))
+    data = PackedData(_toy_bin(tmp_path), block_size=16, val_fraction=0.3)
+
+    first = trainer.eval_step(data)
+    assert set(first) == {"train", "val"}
+    assert trainer.eval_step(data) == first
+
+
+def test_eval_batch_size_overrides_batch_size_for_eval_only(tmp_path, monkeypatch):
+    cfg = TrainConfig(
+        steps=10,
+        batch_size=2,
+        grad_accum=1,
+        block_size=16,
+        eval_iters=1,
+        eval_batch_size=7,
+        val_fraction=0.3,
+        seed=0,
+    )
+    trainer = Trainer.fresh(_tiny(), cfg, Runtime.resolve("cpu"))
+    data = PackedData(_toy_bin(tmp_path), block_size=16, val_fraction=0.3)
+
+    seen: list[int] = []
+    real = PackedData.batch
+    monkeypatch.setattr(
+        PackedData,
+        "batch",
+        lambda self, bs, *a, **k: (seen.append(bs), real(self, bs, *a, **k))[1],
+    )
+
+    trainer.eval_step(data)
+    assert set(seen) == {7}  # eval used eval_batch_size
+    seen.clear()
+    trainer.train_step(data, torch.Generator().manual_seed(0))
+    assert set(seen) == {2}  # train_step still uses batch_size
+
+
 @pytest.mark.filterwarnings("ignore::DeprecationWarning")  # torch.compile internals
 def test_compile_wraps_forward_only_saved_module_stays_raw():
     """cfg.compile must not leak a `_orig_mod.` prefix into the checkpoint:

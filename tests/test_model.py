@@ -78,6 +78,20 @@ def test_built_model_matches_formula(tier):
     assert model.num_parameters() == formula_params(PRESETS[tier])
 
 
+def test_flops_per_token_is_the_palm_estimate():
+    cfg = PRESETS["small"]
+    model = GLSModel(cfg)
+    seq = 128
+    expected = (
+        6 * model.num_parameters(trainable_only=False) + 12 * cfg.n_layers * cfg.d_model * seq
+    )
+    assert model.flops_per_token(seq) == expected
+    # attention term scales with context
+    assert model.flops_per_token(256) - model.flops_per_token(128) == (
+        12 * cfg.n_layers * cfg.d_model * 128
+    )
+
+
 # --- RoPE contributes zero parameters ---------------------------------------
 
 
