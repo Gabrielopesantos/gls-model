@@ -1,11 +1,5 @@
 name: CI
 
-# Mirrors the devenv `check` script (pyright && pytest) plus the pre-commit ruff
-# hooks, so a push is gated on the same bar as a local commit. The suite needs no
-# GPU and no network - test_env skips without CUDA, test_sft monkeypatches
-# load_dataset - and artifacts/tokenizer/tokenizer.json is committed, so the
-# artifact-gated tests run rather than skip.
-
 on:
   push:
   pull_request:
@@ -29,7 +23,7 @@ jobs:
         # --no-sources bypasses the cu129 index pin in pyproject.toml
         # ([tool.uv.sources]); --torch-backend=cpu then resolves the small CPU
         # wheel instead of the ~2.5 GB CUDA one. Groups match devenv's `uv.sync`
-        # (dev + track + infra) so pyright sees wandb / vastai; the `eval` group
+        # (dev + track + infra) so pyright sees wandb/vastai; the `eval` group
         # (lm-eval, transformers) stays out - those tests importorskip.
         run: |
           uv venv --python 3.12
