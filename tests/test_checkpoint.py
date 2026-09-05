@@ -182,3 +182,13 @@ def test_trainer_resume_reproduces_uninterrupted_run(tmp_path):
     tail = run(resumed, gen_r, 2, 4)
 
     assert tail == pytest.approx(straight[2:], rel=1e-4)
+
+
+def test_compile_wraps_forward_only_saved_module_stays_raw():
+    """cfg.compile must not leak a `_orig_mod.` prefix into the checkpoint:
+    self.model stays the raw module, only the forward is wrapped."""
+    cfg = TrainConfig(compile=True, batch_size=2, grad_accum=1, block_size=16)
+    trainer = Trainer.fresh(_tiny(), cfg, Runtime.resolve("cpu"))
+
+    assert trainer._fwd is not trainer.model
+    assert not any(k.startswith("_orig_mod") for k in trainer.model.state_dict())

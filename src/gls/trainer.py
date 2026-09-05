@@ -100,6 +100,11 @@ class Trainer:
         self.model = model
         self.cfg = cfg
         self.rt = rt
+        # torch.compile wraps the forward only. self.model stays the raw module,
+        # so save / param_groups / clip_grad_norm_ never see a `_orig_mod.`
+        # prefix; the step shapes (batch_size x block_size) are static, so it
+        # compiles once and never re-traces.
+        self._fwd = torch.compile(model) if cfg.compile else model
         self.opt = torch.optim.AdamW(
             param_groups(model, cfg.weight_decay),
             lr=cfg.lr,
@@ -149,7 +154,13 @@ class Trainer:
 
     def train_step(self, data: TokenSource, gen: torch.Generator) -> tuple[float, float]:
         """One optimizer step over ``grad_accum`` micro-batches: forward, scaled
-        backward, clip, step, zero. Returns ``(mean micro-batch loss, grad norm)``."""
+        backward, clip, step, zero. Returns ``(mean micro-batch loss, grad norm)``.
+
+        No explicit ``cuda.synchronize`` at the end: the caller's
+        ``loss_accum.item()`` already blocks on the same in-order stream, and the
+        only cost of dropping it is that the step timer stops just before the
+        optimizer-step tail rather than just after.
+        """
         cfg = self.cfg
         self.model.train()
         loss_accum = torch.zeros((), device=self.rt.device)
@@ -158,7 +169,7 @@ class Trainer:
                 cfg.batch_size, self.rt.device, generator=gen, pin_memory=self.rt.pin_memory
             )
             with self.rt.autocast:
-                _, loss = self.model(x, y)
+                _, loss = self._fwd(x, y)
             (loss / cfg.grad_accum).backward()
             loss_accum += loss.detach() / cfg.grad_accum
 
@@ -169,8 +180,6 @@ class Trainer:
         )
         self.opt.step()
         self.opt.zero_grad(set_to_none=True)
-        if self.rt.is_cuda:
-            torch.cuda.synchronize()
         return loss_accum.item(), grad_norm
 
     @torch.no_grad()
@@ -188,8 +197,8 @@ class Trainer:
         if data.has_val:
             splits.append(("val", True))
         for name, is_val in splits:
-            losses = torch.zeros(cfg.eval_iters)
-            for i in range(cfg.eval_iters):
+            total = torch.zeros((), device=self.rt.device)
+            for _ in range(cfg.eval_iters):
                 x, y = data.batch(
                     cfg.batch_size,
                     self.rt.device,
@@ -198,9 +207,9 @@ class Trainer:
                     pin_memory=self.rt.pin_memory,
                 )
                 with self.rt.autocast:
-                    _, loss = self.model(x, y)
-                losses[i] = loss.item()
-            out[name] = losses.mean().item()
+                    _, loss = self._fwd(x, y)
+                total += loss
+            out[name] = (total / cfg.eval_iters).item()
         self.model.train()
         return out
 
