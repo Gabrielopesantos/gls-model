@@ -11,10 +11,14 @@ dependencies = [
     "safetensors>=0.4.5",
 ]
 
+[project.scripts]
+gls = "gls.cli:run"
+
 [dependency-groups]
 dev = [
     "pytest>=8.3",
     "ruff>=0.8",
+    "pyright>=1.1.400",
 ]
 # transformers is establishing a greedy-decode correctness reference.
 eval = [
@@ -51,9 +55,18 @@ packages = ["src/gls"]
 line-length = 100
 target-version = "py312"
 
+[tool.ruff.format]
+# Explicit rather than implied: a pre-commit hook runs `ruff format`.
+docstring-code-format = false
+
 [tool.ruff.lint]
-# E - error, F - flake8, I - isort, UP - pyupgrade, B - black
+# E - pycodestyle, F - pyflakes, I - isort, UP - pyupgrade, B - flake8-bugbear
 select = ["E", "F", "I", "UP", "B"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.pyright]
+typeCheckingMode = "basic"
+include = ["src", "tests"]
+pythonVersion = "3.12"

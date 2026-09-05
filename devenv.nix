@@ -12,9 +12,10 @@
       enable = true;
       sync = {
         enable = true;
-        # Only the dev group by default. The eval and track groups
-        # are installed on demand with `uv sync --group`.
-        groups = [ "dev" ];
+        # dev + track (wandb) by default - per-step loss/LR curves are a
+        # standard part of a run now. The eval group (transformers, lm-eval)
+        # stays on-demand with `uv sync --group eval`.
+        groups = [ "dev" "track" ];
       };
     };
 
@@ -32,17 +33,32 @@
   env.LD_LIBRARY_PATH = lib.mkAfter "${pkgs.addDriverRunpath.driverLink}/lib";
 
   packages = [
+    pkgs.nvitop
+
     # Large unfree download, and most nsight runs happen on
     # the rented GPU box rather than here.
     # pkgs.cudaPackages.nsight_systems
   ];
 
   scripts.gpu-check.exec = ''
-    python -m gls.env
+    gls env
   '';
 
   scripts.check.exec = ''
-    pytest -q "$@"
+    pyright && pytest -q "$@"
+  '';
+
+  # Thin wrappers over the one `gls` console script, kept for muscle memory.
+  scripts.tokenizer.exec = ''
+    gls tokenizer "$@"
+  '';
+
+  scripts.data.exec = ''
+    gls data "$@"
+  '';
+
+  scripts.train.exec = ''
+    gls train "$@"
   '';
 
   scripts.fmt.exec = ''
@@ -52,6 +68,7 @@
   git-hooks.hooks =
     let
       ruff = "${config.devenv.state}/venv/bin/ruff";
+      pyright = "${config.devenv.state}/venv/bin/pyright";
     in
     {
       ruff-lint = {
@@ -68,6 +85,14 @@
         entry = "${ruff} format";
         types = [ "python" ];
         pass_filenames = true;
+      };
+
+      pyright = {
+        enable = true;
+        name = "pyright";
+        entry = "${pyright}";
+        types = [ "python" ];
+        pass_filenames = false;
       };
     };
 
