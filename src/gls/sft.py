@@ -43,9 +43,10 @@ SFT_CORPORA: dict[str, dict] = {
     },
 }
 
-_USER_OPEN = "<|im_start|>user\n"
-_ASSISTANT_OPEN = "<|im_end|>\n<|im_start|>assistant\n"
-_TURN_CLOSE = "<|im_end|>"
+# ChatML framing on the reserved <|im_start|>/<|im_end|> pair.
+USER_OPEN = "<|im_start|>user\n"
+ASSISTANT_OPEN = "<|im_end|>\n<|im_start|>assistant\n"
+TURN_CLOSE = "<|im_end|>"
 
 
 def _note(msg: str) -> None:
@@ -63,8 +64,8 @@ def render(ex: dict, spec: dict) -> tuple[str, str, str]:
     instr = ex[spec["instruction"]].strip()
     ctx = (ex.get(spec["context"]) or "").strip()
     resp = ex[spec["response"]].strip()
-    head = f"{_USER_OPEN}{instr}"
-    return head, ctx, f"{resp}{_TURN_CLOSE}"
+    head = f"{USER_OPEN}{instr}"
+    return head, ctx, f"{resp}{TURN_CLOSE}"
 
 
 def encode(ex: dict, spec: dict, tok, block_size: int) -> tuple[list[int], int, bool] | None:
@@ -77,7 +78,7 @@ def encode(ex: dict, spec: dict, tok, block_size: int) -> tuple[list[int], int, 
     """
     head, ctx, resp = render(ex, spec)
     head_ids = tok.encode(head, add_special_tokens=False).ids
-    tail_ids = tok.encode(_ASSISTANT_OPEN, add_special_tokens=False).ids
+    tail_ids = tok.encode(ASSISTANT_OPEN, add_special_tokens=False).ids
     resp_ids = tok.encode(resp, add_special_tokens=False).ids
 
     fixed = len(head_ids) + len(tail_ids) + len(resp_ids)
@@ -124,7 +125,7 @@ class SFTData:
         spec = SFT_CORPORA[corpus]
         self.block_size = block_size
 
-        tok = data._load_tokenizer()
+        tok = data.load_tokenizer()
         pad = tok.token_to_id("<|pad|>")
         if pad is None:
             raise SystemExit("tokenizer artifact has no <|pad|> token")

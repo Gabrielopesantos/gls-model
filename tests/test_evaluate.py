@@ -2,7 +2,7 @@
 
 The adapter's tokenizer is faked, so these run without the artifact; the
 `lm_eval` package (dev sync pulls it via the `eval` group) is imported lazily
-inside `_make_adapter` / `harness`.
+inside `_make_adapter` and `harness`.
 """
 
 from __future__ import annotations
@@ -57,7 +57,7 @@ def _tiny_ckpt(tmp_path):
 
 @pytest.fixture
 def adapter(tmp_path, monkeypatch):
-    monkeypatch.setattr("gls.data._load_tokenizer", lambda: _FakeTok())
+    monkeypatch.setattr("gls.data.load_tokenizer", lambda: _FakeTok())
     d, model, cfg = _tiny_ckpt(tmp_path)
     return evaluate._make_adapter(d, "cpu", batch_size=1), model, cfg
 
@@ -142,7 +142,7 @@ def _run_with_meta(tmp_path, meta: dict):
 
 
 def test_perplexity_takes_seed_and_block_size_from_run_meta(tmp_path, monkeypatch):
-    monkeypatch.setattr("gls.data._load_tokenizer", lambda: _FakeTok())
+    monkeypatch.setattr("gls.data.load_tokenizer", lambda: _FakeTok())
     monkeypatch.setattr(sft, "SFTData", _FakeSFTData)
     step_dir = _run_with_meta(tmp_path, {"seed": 99, "val_fraction": 0.2, "block_size": 7})
 
@@ -157,7 +157,7 @@ def test_perplexity_takes_seed_and_block_size_from_run_meta(tmp_path, monkeypatc
 
 
 def test_perplexity_block_size_falls_back_to_max_seq_len(tmp_path, monkeypatch):
-    monkeypatch.setattr("gls.data._load_tokenizer", lambda: _FakeTok())
+    monkeypatch.setattr("gls.data.load_tokenizer", lambda: _FakeTok())
     monkeypatch.setattr(sft, "SFTData", _FakeSFTData)
     # train_config.json carries block_size=null (the TrainConfig default), so the
     # checkpoint's own max_seq_len is what training resolved to.

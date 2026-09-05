@@ -22,7 +22,7 @@ dev = [
 ]
 # lm-eval scores tasks through our own GLSModel adapter (gls.evaluate); it is
 # here for simple_evaluate and the task data. transformers backs `gls eval
-# export` - the Phase 2 greedy-decode reference and adapter cross-check.
+# export` - the greedy-decode reference and adapter cross-check.
 eval = [
     "transformers>=4.48",
     "lm-eval>=0.4.5",

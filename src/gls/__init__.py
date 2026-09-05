@@ -19,14 +19,18 @@ _EXPORTS = {
     "PackedData": "gls.data",
     "StreamingTokens": "gls.data",
     "TokenSource": "gls.data",
+    "SamplingConfig": "gls.sampling",
+    "Session": "gls.inference",
 }
 
 __all__ = [
     "GLSModel",
     "ModelConfig",
     "PRESETS",
-    "Runtime",
     "PackedData",
+    "Runtime",
+    "SamplingConfig",
+    "Session",
     "StreamingTokens",
     "TokenSource",
     "TrainConfig",
@@ -49,6 +53,8 @@ def __dir__() -> list[str]:
 
 if TYPE_CHECKING:
     from gls.data import PackedData, StreamingTokens, TokenSource
+    from gls.inference import Session
     from gls.model import PRESETS, GLSModel, ModelConfig, build_model
+    from gls.sampling import SamplingConfig
     from gls.train import TrainConfig, train
     from gls.trainer import Runtime, Trainer

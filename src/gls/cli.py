@@ -120,7 +120,7 @@ def _cmd_model(argv: list[str]) -> int:
 
     p = argparse.ArgumentParser(prog="gls model", description="inspect a tier's architecture")
     sub = p.add_subparsers(dest="cmd", required=True)
-    s = sub.add_parser("summary", help="per-layer table + param / activation / KV sizes")
+    s = sub.add_parser("summary", help="per-layer table plus param, activation and KV sizes")
     s.add_argument("--tier", default="medium", choices=list(PRESETS))
     s.add_argument("--batch-size", type=int, default=8)
     s.add_argument("--block-size", type=int, default=None, help="default: tier max_seq_len")
@@ -131,6 +131,45 @@ def _cmd_model(argv: list[str]) -> int:
     viz.summary(a.tier, batch_size=a.batch_size, block_size=a.block_size)
     if a.graph:
         viz.graph(a.tier, a.graph, block_size=a.block_size)
+    return 0
+
+
+def _cmd_chat(argv: list[str]) -> int:
+    from gls.chat import chat
+    from gls.sampling import SamplingConfig
+
+    d = SamplingConfig()
+    p = argparse.ArgumentParser(prog="gls chat", description="talk to a checkpoint over a KV cache")
+    p.add_argument("--ckpt", required=True, help="checkpoint dir or run dir")
+    p.add_argument("--prompt", default=None, help="one-shot: answer this and exit (no REPL)")
+    p.add_argument(
+        "--raw",
+        action="store_true",
+        help="feed the prompt verbatim, stop on <|endoftext|> (for a base checkpoint)",
+    )
+    p.add_argument("--max-new-tokens", type=int, default=256)
+    p.add_argument("--temperature", type=float, default=d.temperature)
+    p.add_argument("--top-k", type=int, default=d.top_k)
+    p.add_argument("--top-p", type=float, default=d.top_p)
+    p.add_argument("--repetition-penalty", type=float, default=d.repetition_penalty)
+    p.add_argument("--seed", type=int, default=None)
+    p.add_argument("--device", default=None, help="e.g. cpu, cuda; default auto")
+    a = p.parse_args(argv)
+
+    chat(
+        a.ckpt,
+        prompt=a.prompt,
+        raw=a.raw,
+        max_new_tokens=a.max_new_tokens,
+        sampling=SamplingConfig(
+            temperature=a.temperature,
+            top_k=a.top_k,
+            top_p=a.top_p,
+            repetition_penalty=a.repetition_penalty,
+        ),
+        seed=a.seed,
+        device=a.device,
+    )
     return 0
 
 
@@ -158,6 +197,7 @@ _COMMANDS = {
     "tokenizer": _cmd_tokenizer,
     "eval": _cmd_eval,
     "model": _cmd_model,
+    "chat": _cmd_chat,
     "env": _cmd_env,
 }
 

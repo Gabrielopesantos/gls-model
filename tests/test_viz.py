@@ -19,7 +19,7 @@ def test_summary_prints_activation_footer_and_deduped_param_count(capsys):
     pytest.importorskip("torchinfo")
     viz.summary("small", batch_size=2, block_size=32)
     out = capsys.readouterr()
-    assert "Estimated Total Size" in out.out  # the number the command exists for
+    assert "Estimated Total Size" in out.out  # torchinfo's activation-size footer
     # the note carries num_parameters(), which dedupes the tied lm_head - not
     # torchinfo's "Total params", which counts it twice
     assert f"{build_model('small').num_parameters():,}" in out.err

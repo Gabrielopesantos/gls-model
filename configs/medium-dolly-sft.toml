@@ -3,9 +3,13 @@
 #   gls eval ppl --ckpt runs/medium-fineweb --corpus dolly      # baseline
 #   gls train --config configs/medium-dolly-sft.toml --wandb
 #   gls eval ppl --ckpt runs/medium-dolly-sft --corpus dolly    # after
-#   gls eval harness --ckpt runs/medium-dolly-sft               # lambada/arc_easy/piqa
+#   gls eval harness --ckpt runs/medium-dolly-sft               # lambada, arc_easy, piqa
 #   # resume after a kill (init_from is ignored once the run has its own state):
 #   gls train --config configs/medium-dolly-sft.toml --resume auto
+#
+# Separate file, not an edit of the small one: that carries run_name =
+# "small-dolly-sft" and editing it in place both collides with the existing
+# runs/small-dolly-sft/ state and destroys the small-run reproduction.
 
 tier = "medium"
 corpus = "dolly"

@@ -242,7 +242,7 @@ def train(cfg: TrainConfig) -> Path:
         )
         _sync(ckpt)
 
-    # SIGTERM (the preemption / `scancel` signal) checkpoints and exits through
+    # SIGTERM (the preemption or `scancel` signal) checkpoints and exits through
     # the normal teardown. SIGINT keeps its hard-abort default on purpose - a
     # Ctrl-C at the keyboard is "stop now", not "wrap up".
     stop = threading.Event()
