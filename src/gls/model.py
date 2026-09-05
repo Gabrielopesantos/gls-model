@@ -345,7 +345,15 @@ class GLSModel(nn.Module):
             # cross_entropy is an autocast-to-fp32 op, so bf16 logits are
             # promoted inside it - no need for an explicit .float() copy, which
             # at vocab 32000 is a multi-GiB tensor held for the whole backward.
-            loss = F.cross_entropy(logits.reshape(-1, logits.shape[-1]), targets.reshape(-1))
+            # ignore_index=-100 is cross_entropy's default; named here because SFT
+            # leans on it - prompt and padding positions carry -100 so loss lands
+            # on the response span only. Inert for pretraining (the packed stream
+            # never emits -100).
+            loss = F.cross_entropy(
+                logits.reshape(-1, logits.shape[-1]),
+                targets.reshape(-1),
+                ignore_index=-100,
+            )
         return logits, loss
 
     def num_parameters(self, trainable_only: bool = True) -> int:

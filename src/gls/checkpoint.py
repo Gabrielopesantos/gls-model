@@ -197,6 +197,26 @@ def load(ckpt_dir: Path, device: str = "cpu") -> tuple[GLSModel, TrainerState]:
     return model, state
 
 
+def resolve_init(spec: str) -> Path:
+    """Resolve a weights-only spec to a checkpoint directory. Backs both
+    ``gls train --init-from`` and ``gls eval --ckpt``.
+
+    ``spec`` is either a checkpoint dir (holds ``model.safetensors``) or a run
+    dir, in which case ``best.json`` is preferred over ``latest.json``. Unlike
+    ``resolve_resume`` this loads weights only - the optimizer, step and RNG all
+    start fresh - so a fine-tune is a new run that inherits weights, not a
+    continuation.
+    """
+    p = Path(spec)
+    if (p / "model.safetensors").exists():
+        return p
+    for finder in (best_dir, latest_dir):
+        d = finder(p)
+        if d is not None:
+            return d
+    raise SystemExit(f"{spec}: no checkpoint here or under {p / CKPT_SUBDIR}")
+
+
 def resolve_resume(run_dir: Path, spec: str | None) -> Path | None:
     """``None`` -> no resume. ``"auto"`` -> ``latest.json`` under ``run_dir`` (or
     ``None`` if there is none - a fresh run). Anything else -> that path."""

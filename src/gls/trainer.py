@@ -114,6 +114,16 @@ class Trainer:
         return cls(GLSModel(model_cfg).to(rt.device), cfg, rt)
 
     @classmethod
+    def init_from(cls, ckpt_dir: Path, cfg: TrainConfig, rt: Runtime) -> Trainer:
+        """Fine-tune seed: load another run's weights, then build a fresh
+        optimizer against that model. Step, LR schedule and optimizer moments all
+        start at zero - this is ``fresh`` with inherited weights, not ``resume``.
+        Deliberately ``load_model_dir`` (weights + config) and not
+        ``checkpoint.load``, which would also pull the source run's TrainerState.
+        """
+        return cls(checkpoint.load_model_dir(ckpt_dir, rt.device), cfg, rt)
+
+    @classmethod
     def resume(
         cls,
         ckpt_dir: Path,

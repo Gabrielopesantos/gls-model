@@ -11,7 +11,7 @@ import argparse
 import os
 import sys
 
-from gls import data, env, tokenizer
+from gls import checkpoint, data, env, sft, tokenizer
 from gls.config import add_dataclass_args, resolve
 from gls.model import PRESETS
 from gls.train import TrainConfig, train
@@ -24,6 +24,12 @@ def _cmd_train(argv: list[str]) -> int:
     cfg = resolve(TrainConfig, p, argv)
     if cfg.tier not in PRESETS:  # validated here so nothing downstream has to
         raise SystemExit(f"unknown tier {cfg.tier!r}; choose from {list(PRESETS)}")
+    if cfg.init_from:
+        # resolve now so a bad path fails at the boundary, before any work. If
+        # --resume also applies (an interrupted fine-tune re-run with the same
+        # config), resume wins in train() and this seed is ignored - not a
+        # conflict, so no error here.
+        checkpoint.resolve_init(cfg.init_from)
     train(cfg)
     return 0
 
@@ -66,6 +72,49 @@ def _cmd_tokenizer(argv: list[str]) -> int:
     return 0
 
 
+def _cmd_eval(argv: list[str]) -> int:
+    from gls import evaluate
+
+    p = argparse.ArgumentParser(prog="gls eval", description="before/after fine-tuning measurement")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    ppl = sub.add_parser("ppl", help="response-token perplexity on a held-out instruction split")
+    ppl.add_argument("--ckpt", required=True, help="checkpoint dir or run dir")
+    ppl.add_argument("--corpus", default="dolly", choices=list(sft.SFT_CORPORA))
+    ppl.add_argument("--split", default="val", choices=["train", "val"])
+    ppl.add_argument("--iters", type=int, default=200)
+    ppl.add_argument("--batch-size", type=int, default=16)
+    ppl.add_argument("--seed", type=int, default=None, help="default: the run's recorded seed")
+    ppl.add_argument("--device", default=None)
+
+    exp = sub.add_parser("export", help="write a transformers-loadable dir via the Llama converter")
+    exp.add_argument("--ckpt", required=True)
+    exp.add_argument("--out", required=True)
+
+    har = sub.add_parser("harness", help="score a checkpoint on lm-eval tasks via GLSModel")
+    har.add_argument("--ckpt", required=True, help="checkpoint dir or run dir")
+    har.add_argument("--tasks", default=",".join(evaluate.DEFAULT_TASKS))
+    har.add_argument("--limit", type=int, default=None, help="cap docs/task (smoke run)")
+    har.add_argument("--device", default=None, help="e.g. cpu, cuda, gpu; default auto")
+
+    a = p.parse_args(argv)
+    if a.cmd == "ppl":
+        evaluate.perplexity(
+            a.ckpt,
+            a.corpus,
+            split=a.split,
+            iters=a.iters,
+            batch_size=a.batch_size,
+            seed=a.seed,
+            device=a.device,
+        )
+    elif a.cmd == "export":
+        evaluate.export_hf(a.ckpt, a.out)
+    else:
+        evaluate.harness(a.ckpt, tuple(a.tasks.split(",")), limit=a.limit, device=a.device)
+    return 0
+
+
 def _cmd_env(argv: list[str]) -> int:
     argparse.ArgumentParser(prog="gls env", description="print torch/CUDA/device facts").parse_args(
         argv
@@ -88,6 +137,7 @@ _COMMANDS = {
     "train": _cmd_train,
     "data": _cmd_data,
     "tokenizer": _cmd_tokenizer,
+    "eval": _cmd_eval,
     "env": _cmd_env,
 }
 

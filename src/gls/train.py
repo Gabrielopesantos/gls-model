@@ -16,7 +16,7 @@ from pathlib import Path
 
 import torch
 
-from gls import checkpoint, env, paths
+from gls import checkpoint, env, paths, sft
 from gls.data import PackedData, StreamingTokens, TokenSource, resolve_source
 from gls.model import PRESETS
 from gls.tracking import Run
@@ -62,6 +62,9 @@ class TrainConfig:
     keep_last: int = _f("checkpoints to retain (best is always kept)", default=3)
 
     resume: str | None = _f("'auto', a checkpoint dir, or unset", default=None)
+    init_from: str | None = _f(
+        "seed weights from a checkpoint/run dir (fine-tune); fresh optimizer, step 0", default=None
+    )
     wandb: bool = _f("mirror metrics to Weights & Biases", default=False)
     wandb_project: str = _f("W&B project", default="gls-model")
     wandb_run_name: str | None = _f("W&B run name; default = run dir name", default=None)
@@ -90,6 +93,13 @@ def lr_at(step: int, cfg: TrainConfig) -> float:
 
 
 def _make_data(cfg: TrainConfig, block_size: int, skip_docs: int) -> TokenSource:
+    if cfg.corpus in sft.SFT_CORPORA:
+        return sft.SFTData(
+            cfg.corpus,
+            block_size,
+            val_fraction=cfg.val_fraction or sft.DEFAULT_VAL_FRACTION,
+            seed=cfg.seed,
+        )
     if cfg.stream:
         return StreamingTokens(cfg.corpus, block_size, skip_docs=skip_docs)
     source = resolve_source(cfg.corpus, "train")
@@ -132,11 +142,27 @@ def train(cfg: TrainConfig) -> Path:
     sampler_gen = torch.Generator().manual_seed(cfg.seed)
 
     if resuming:
+        if cfg.init_from:
+            _note(
+                f"--init-from {cfg.init_from} ignored: resuming {run_dir.name} from its own state"
+            )
         trainer, state = Trainer.resume(resume_from, cfg, rt, sampler_gen)
         start_step = state.step
         best_val = state.best_val
         skip_docs = state.train_config.get("_stream_docs", 0)
         _note(f"resuming {run_dir.name} from step {start_step}")
+    elif cfg.init_from:
+        # A fine-tune: inherit weights, nothing else. --resume on this same run
+        # dir still wins (an interrupted SFT continues from its own checkpoint),
+        # which is why this is the `elif` and not checked first.
+        src = checkpoint.resolve_init(cfg.init_from)
+        trainer = Trainer.init_from(src, cfg, rt)
+        start_step, best_val, skip_docs = 0, None, 0
+        if trainer.model.cfg != model_cfg:
+            _note(
+                f"warning: --tier {cfg.tier} != the checkpoint architecture; using the checkpoint"
+            )
+        _note(f"init weights from {src}")
     else:
         trainer = Trainer.fresh(model_cfg, cfg, rt)
         start_step, best_val, skip_docs = 0, None, 0

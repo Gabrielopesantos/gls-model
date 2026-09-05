@@ -110,6 +110,34 @@ def test_state_restores_optimizer_and_sampler(tmp_path):
     assert restored_state.optimizer["state"]
 
 
+def test_trainer_init_from_is_fresh_optimizer_inherited_weights(tmp_path):
+    from gls.checkpoint import load, resolve_init
+
+    torch.manual_seed(0)
+    model = GLSModel(_tiny())
+    opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
+    gen = torch.Generator().manual_seed(0)
+    for _ in range(3):  # give AdamW real moment buffers in the source run
+        model(torch.randint(0, 256, (2, 16)), torch.randint(0, 256, (2, 16)))[1].backward()
+        opt.step()
+        opt.zero_grad()
+    save(tmp_path / "base", 7, model, _state(7, opt, gen), keep_last=3)
+
+    cfg = TrainConfig(steps=10, batch_size=2, grad_accum=1, block_size=16)
+    trainer = Trainer.init_from(resolve_init(str(tmp_path / "base")), cfg, Runtime.resolve("cpu"))
+
+    # weights inherited...
+    base_ckpt = latest_dir(tmp_path / "base")
+    assert base_ckpt is not None
+    src_model, _ = load(base_ckpt)
+    for (_, a), (_, b) in zip(
+        trainer.model.state_dict().items(), src_model.state_dict().items(), strict=True
+    ):
+        assert torch.equal(a, b)
+    # ...optimizer and step are not: a fine-tune starts at zero.
+    assert all(not st for st in trainer.opt.state_dict()["state"].values())
+
+
 def test_lr_schedule_is_step_addressable():
     # resume relies on lr_at(step) being a pure function, not a stateful sched
     cfg = TrainConfig(lr=1e-3, warmup_steps=10, steps=100)
