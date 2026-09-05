@@ -40,6 +40,7 @@
 
   packages = [
     pkgs.nvitop
+    pkgs.graphviz # `gls model summary --graph` (torchview) shells out to `dot`
 
     # Large unfree download, and most nsight runs happen on
     # the rented GPU box rather than here.

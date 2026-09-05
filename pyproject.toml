@@ -31,6 +31,12 @@ eval = [
 track = [
     "wandb>=0.19",
 ]
+# `gls model summary` (torchinfo: per-layer table + activation estimate) and its
+# optional diagram (torchview, also needs the graphviz binary - see devenv.nix).
+viz = [
+    "torchinfo>=1.8",
+    "torchview>=0.2.6",
+]
 
 # Torch is pulled from the CUDA 12.9 wheel index rather than PyPI. cu129 over
 # cu130 on purpose: CUDA 12.x minor-version compatibility means these wheels run

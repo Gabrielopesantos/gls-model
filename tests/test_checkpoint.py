@@ -184,6 +184,7 @@ def test_trainer_resume_reproduces_uninterrupted_run(tmp_path):
     assert tail == pytest.approx(straight[2:], rel=1e-4)
 
 
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")  # torch.compile internals
 def test_compile_wraps_forward_only_saved_module_stays_raw():
     """cfg.compile must not leak a `_orig_mod.` prefix into the checkpoint:
     self.model stays the raw module, only the forward is wrapped."""

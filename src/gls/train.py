@@ -269,18 +269,27 @@ def train(cfg: TrainConfig) -> Path:
             done_steps = step - start_step + 1
             eta_s = (time.time() - t0) / done_steps * (cfg.steps - step - 1)
 
+            # The first step pays the torch.compile trace and its transient
+            # allocations; reset the peak once it is behind us so the logged
+            # figure is the steady-state training residency the rental is sized
+            # against.
+            if is_first and rt.is_cuda:
+                torch.cuda.reset_peak_memory_stats()
+
             if _due(step, cfg.log_interval) and not is_first:
-                run.log(
-                    {
-                        "train/loss": round(loss_val, 4),
-                        "train/lr": lr,
-                        "train/grad_norm": round(grad_norm, 3),
-                        "train/tokens_per_sec": round(tokens_per_step / dt),
-                        "train/eta_s": round(eta_s),
-                        "elapsed_s": round(time.time() - t0, 1),
-                    },
-                    step=step,
-                )
+                row = {
+                    "train/loss": round(loss_val, 4),
+                    "train/lr": lr,
+                    "train/grad_norm": round(grad_norm, 3),
+                    "train/tokens_per_sec": round(tokens_per_step / dt),
+                    "train/eta_s": round(eta_s),
+                    "elapsed_s": round(time.time() - t0, 1),
+                }
+                if rt.is_cuda:
+                    row["train/peak_mem_gib"] = round(
+                        torch.cuda.max_memory_allocated() / 1024**3, 3
+                    )
+                run.log(row, step=step)
 
             saved_after: int | None = None
 

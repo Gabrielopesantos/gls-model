@@ -7,6 +7,7 @@ import json
 import numpy as np
 import torch
 
+import gls.data as gd
 from gls.data import PackedData, StreamingTokens, TokenSource, _Shards
 
 
@@ -65,6 +66,74 @@ def test_val_fraction_carves_tail(tmp_path):
     assert data.n_tokens(val=True) == 100
     # train slab must not reach into the val tail
     assert data._hi <= 900
+
+
+# --- prepare(): the sharded writer, exercised end to end -----------------------
+
+
+class _FakeEnc:
+    def __init__(self, ids):
+        self.ids = ids
+
+
+class _FakeTok:
+    """5 ids per doc; prepare() appends the eot itself."""
+
+    def encode_batch(self, texts, add_special_tokens=False):
+        return [_FakeEnc([7, 7, 7, 7, 7]) for _ in texts]
+
+
+def _patch_prepare(monkeypatch, tmp_path, n_docs):
+    monkeypatch.setattr(gd.paths, "packed_dir", lambda: tmp_path)
+    monkeypatch.setattr(gd, "_load_tokenizer", lambda: _FakeTok())
+    monkeypatch.setattr(gd, "_eot_id", lambda tok: 0)
+    # small encode chunk so the shard-flush threshold is crossed several times
+    monkeypatch.setattr(gd, "_ENCODE_CHUNK", 5)
+    docs = [{"text": f"doc {i}"} for i in range(n_docs)]
+
+    class _FakeDS:  # iter(ds) must yield a generator - prepare() calls .close() on it
+        def __iter__(self):
+            yield from docs
+
+    monkeypatch.setattr(gd, "_open_stream", lambda corpus, split: (_FakeDS(), "text"))
+
+
+def test_prepare_writes_multiple_shards(monkeypatch, tmp_path):
+    _patch_prepare(monkeypatch, tmp_path, n_docs=30)
+    # 30 docs x 6 tokens = 180; a 50-token shard cap forces 4 shards.
+    out = gd.prepare("fineweb-edu", "train", shard_tokens=50)
+
+    idx = json.loads((out / "train-index.json").read_text())
+    names = [s["name"] for s in idx["shards"]]
+    assert len(names) >= 3
+    assert names == sorted(names)  # train-00000.bin, train-00001.bin, ...
+    assert sum(s["n_tokens"] for s in idx["shards"]) == 30 * 6
+
+    assert not list(out.glob("*.tmp"))
+    for s in idx["shards"]:
+        assert (out / s["name"]).exists()
+
+    # the pack round-trips through the reader as one logical stream
+    data = PackedData(out, block_size=8)
+    assert data.n_tokens() == 180
+    x, y = data.batch(4, "cpu", generator=torch.Generator().manual_seed(0))
+    assert x.shape == (4, 8) and torch.equal(y[:, :-1], x[:, 1:])
+
+
+def test_prepare_force_clears_stale_shards(monkeypatch, tmp_path):
+    _patch_prepare(monkeypatch, tmp_path, n_docs=30)
+    gd.prepare("fineweb-edu", "train", shard_tokens=50)
+    out = tmp_path / "fineweb-edu"
+    n_first = len(json.loads((out / "train-index.json").read_text())["shards"])
+    assert n_first >= 3
+
+    _patch_prepare(monkeypatch, tmp_path, n_docs=6)
+    gd.prepare("fineweb-edu", "train", shard_tokens=50, force=True)
+    idx = json.loads((out / "train-index.json").read_text())
+    assert sum(s["n_tokens"] for s in idx["shards"]) == 6 * 6
+    # no shard from the larger first run left behind
+    bins = sorted(p.name for p in out.glob("train-*.bin"))
+    assert bins == [s["name"] for s in idx["shards"]]
 
 
 # --- both sources honour the TokenSource contract train() samples through -----
