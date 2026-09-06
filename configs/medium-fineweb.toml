@@ -42,10 +42,15 @@ keep_last = 3
 patience = 0
 min_improvement = 0.005
 
-# Checkpoints land on the instance's ephemeral disk - copy each one off-box as it
-# is written. {ckpt} is the step dir just saved, {run} the run dir. Best-effort
-# and non-blocking: a failed upload warns and training continues. The remote copy
-# is free to accumulate past keep_last - that is the point of having it.
+# Checkpoints land on the instance's ephemeral disk - copy the run tree off-box
+# after every save. Syncing {run} rather than {ckpt} carries the pointer files
+# (checkpoints/latest.json, best.json), train_config.json, log.jsonl and env.json
+# along with the step dir - everything needed to resume or score the run. rclone
+# copy skips files already at the destination, so each save still moves only the
+# new step dir plus a few KB; it never deletes, so the remote is free to
+# accumulate past keep_last - that is the point of having it. Best-effort and
+# non-blocking during the loop; the final sync at exit blocks until it lands.
+sync_cmd = "rclone copy --transfers 8 --exclude '*.tmp/**' {run} $GLS_REMOTE:$GLS_BUCKET/gls-runs/$(basename {run})"
 
 run_name = "medium-fineweb"
 wandb_project = "gls-model"

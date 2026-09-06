@@ -14,12 +14,14 @@
 tier = "medium"
 corpus = "dolly"
 init_from = "runs/medium-fineweb"
+# 400 steps (~3.5 passes over the 14k train split).
 steps = 400
 
-# 16 x 8 accum = 128 example-draws/step; ~3.5x the 14k train split over 400 steps
-# (sampling is with replacement, not epoch-based).
-batch_size = 16
-grad_accum = 8
+# 4 x 32 accum = 128 example-draws/step. batch_size 16 OOMs a 40GB A100: Dolly
+# pads each batch to its own longest example, widths reach ~1139, and the varying
+# shape fragments the allocator (~6.8 GiB lost).
+batch_size = 4
+grad_accum = 32
 
 # Below the small run's 2e-5: the medium base actually learned language during
 # pretraining, so the fine-tune should nudge more gently than it did on the
@@ -37,6 +39,9 @@ eval_interval = 50
 eval_iters = 40
 ckpt_interval = 100
 keep_last = 3
+
+# Sync the whole run tree, not just {ckpt}.
+sync_cmd = "rclone copy --transfers 8 --exclude '*.tmp/**' {run} $GLS_REMOTE:$GLS_BUCKET/gls-runs/$(basename {run})"
 
 run_name = "medium-dolly-sft"
 wandb_project = "gls-model"

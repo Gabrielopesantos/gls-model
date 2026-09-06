@@ -152,3 +152,43 @@ def test_sync_cmd_runs_after_each_checkpoint(env):
 def test_sync_cmd_failure_does_not_abort_run(env):
     T.train(_cfg(run_name="x", steps=3, ckpt_interval=3, sync_cmd="false"))
     assert (env / "runs" / "x" / "checkpoints" / "latest.json").exists()
+
+
+def test_sync_cmd_run_tree_carries_pointers_and_final_log(env):
+    # A {run}-tree sync_cmd: the final sync fires after run.finish(), so the
+    # copied log.jsonl must include the terminating `done` row and the pointer
+    # files must be present.
+    dest = env / "synced"
+    dest.mkdir()
+    T.train(
+        _cfg(
+            run_name="y",
+            steps=3,
+            eval_interval=1,
+            ckpt_interval=3,
+            sync_cmd=f"cp -r {{run}}/. {dest}/",
+        )
+    )
+    assert (dest / "checkpoints" / "latest.json").exists()
+    assert (dest / "train_config.json").exists()
+    synced_events = [json.loads(x) for x in (dest / "log.jsonl").read_text().splitlines()]
+    assert synced_events[-1].get("event") == "done"
+
+
+def test_final_sync_waits_out_an_in_flight_upload(env):
+    # A slow hook still running when the loop ends: the teardown sync must wait
+    # for it and then run once more, so the newest checkpoint lands. Before the
+    # `final=True` path this checkpoint was dropped.
+    dest = env / "synced"
+    dest.mkdir()
+    T.train(
+        _cfg(
+            run_name="w",
+            steps=3,
+            eval_interval=1,
+            ckpt_interval=1,
+            sync_cmd=f"sleep 1; cp -r {{run}}/. {dest}/",
+        )
+    )
+    latest = json.loads((env / "runs" / "w" / "checkpoints" / "latest.json").read_text())
+    assert (dest / "checkpoints" / latest["path"] / "model.safetensors").exists()

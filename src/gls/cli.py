@@ -82,9 +82,23 @@ def _cmd_eval(argv: list[str]) -> int:
     ppl.add_argument("--ckpt", required=True, help="checkpoint dir or run dir")
     ppl.add_argument("--corpus", default="dolly", choices=list(sft.SFT_CORPORA))
     ppl.add_argument("--split", default="val", choices=["train", "val"])
-    ppl.add_argument("--iters", type=int, default=200)
+    ppl.add_argument(
+        "--iters",
+        type=int,
+        default=None,
+        help="sample this many batches WITH REPLACEMENT instead of the default "
+        "deterministic full sweep of the split; the sampled number is not reproducible "
+        "across different --iters/--batch-size",
+    )
     ppl.add_argument("--batch-size", type=int, default=16)
     ppl.add_argument("--seed", type=int, default=None, help="default: the run's recorded seed")
+    ppl.add_argument(
+        "--val-fraction",
+        type=float,
+        default=None,
+        help="holdout fraction; default: the run's recorded val_fraction. Set this to "
+        "measure two checkpoints on the same split when their runs recorded different values.",
+    )
     ppl.add_argument("--device", default=None)
 
     exp = sub.add_parser("export", help="write a transformers-loadable dir via the Llama converter")
@@ -106,6 +120,7 @@ def _cmd_eval(argv: list[str]) -> int:
             iters=a.iters,
             batch_size=a.batch_size,
             seed=a.seed,
+            val_fraction=a.val_fraction,
             device=a.device,
         )
     elif a.cmd == "export":

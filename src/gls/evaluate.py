@@ -53,14 +53,26 @@ def perplexity(
     *,
     split: str = "val",
     batch_size: int = 16,
-    iters: int = 200,
+    iters: int | None = None,
     seed: int | None = None,
     val_fraction: float | None = None,
     device: str | None = None,
 ) -> dict[str, float]:
-    """Token-weighted mean response-token loss and its exp, over ``iters``
-    sampled batches. ``seed``/``val_fraction`` default to the values recorded
-    in the checkpoint's run config so the holdout matches training."""
+    """Token-weighted mean response-token loss and its exp.
+
+    Default (``iters=None``) is a **deterministic full sweep**: every example in
+    the split scored exactly once. The number then depends only on
+    (checkpoint, corpus, split, seed, val_fraction, block_size) - not on
+    ``batch_size``, and not on how long you let it run - so two checkpoints are
+    comparable and a rerun reproduces the value exactly.
+
+    Passing ``iters`` restores the old sampled estimate (``iters`` batches drawn
+    *with replacement*), which is cheaper on a large split but is a perplexity
+    over a random multiset, not over the holdout.
+
+    ``seed``/``val_fraction`` default to the values recorded in the checkpoint's
+    run config so the holdout matches training.
+    """
     ckpt_dir = checkpoint.resolve_init(str(ckpt))
     meta = _run_meta(ckpt_dir)
     if not meta:
@@ -83,16 +95,30 @@ def perplexity(
     # too long and which contexts are trimmed, so a mismatch carves a different
     # holdout. Training uses `cfg.block_size or max_seq_len` (gls.train._make_data).
     block_size = int(meta.get("block_size") or model.cfg.max_seq_len)
+    vf_src = (
+        "cli"
+        if val_fraction is not None
+        else ("recorded" if meta.get("val_fraction") else "default")
+    )
+    _note(f"holdout: seed {the_seed}  val_fraction {the_vf} ({vf_src})  block_size {block_size}")
     src = sft.SFTData(corpus, block_size, val_fraction=the_vf, seed=the_seed)
     is_val = split == "val"
     gen = torch.Generator().manual_seed(the_seed + 7)
 
-    total_loss, total_tok = 0.0, 0
+    if iters is None:
+        batches = src.sweep(batch_size, rt.device, val=is_val, pin_memory=rt.pin_memory)
+        mode = "full sweep"
+    else:
+        batches = (
+            src.batch(batch_size, rt.device, val=is_val, generator=gen, pin_memory=rt.pin_memory)
+            for _ in range(iters)
+        )
+        mode = f"sampled, {iters} iters x {batch_size}"
+
+    total_loss, total_tok, n_ex = 0.0, 0, 0
     with torch.no_grad():
-        for _ in range(iters):
-            x, y = src.batch(
-                batch_size, rt.device, val=is_val, generator=gen, pin_memory=rt.pin_memory
-            )
+        for x, y in batches:
+            n_ex += x.shape[0]
             with rt.autocast:
                 logits, _ = model(x)
             total_loss += F.cross_entropy(
@@ -104,8 +130,11 @@ def perplexity(
             total_tok += int((y != sft.IGNORE_INDEX).sum().item())
 
     mean = total_loss / max(total_tok, 1)
-    out = {"loss": mean, "ppl": math.exp(mean), "tokens": float(total_tok)}
-    _note(f"{ckpt_dir}  {split}  loss {mean:.4f}  ppl {out['ppl']:.2f}  ({total_tok} tokens)")
+    out = {"loss": mean, "ppl": math.exp(mean), "tokens": float(total_tok), "examples": float(n_ex)}
+    _note(
+        f"{ckpt_dir}  {split}  loss {mean:.4f}  ppl {out['ppl']:.2f}  "
+        f"({total_tok} response tokens over {n_ex} examples; {mode})"
+    )
     return out
 
 

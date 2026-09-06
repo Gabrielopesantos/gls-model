@@ -31,6 +31,9 @@ eval = [
 track = [
     "wandb>=0.19",
 ]
+infra = [
+    "vastai>=1.5.6",
+]
 # `gls model summary` (torchinfo: per-layer table + activation estimate) and its
 # optional diagram (torchview, also needs the graphviz binary - see devenv.nix).
 viz = [

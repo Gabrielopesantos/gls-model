@@ -20,6 +20,7 @@ embeddings is fine, worth knowing when reading the first few hundred steps.
 from __future__ import annotations
 
 import sys
+from collections.abc import Iterator
 from typing import Any
 
 import numpy as np
@@ -189,11 +190,47 @@ class SFTData:
         if len(pool) == 0:
             raise ValueError(f"no examples in the {'val' if val else 'train'} split")
         sel = torch.randint(0, len(pool), (batch_size,), generator=generator).tolist()
-        rows = [self._ex[pool[i]] for i in sel]
-        width = max(len(ids) for ids, _ in rows)
+        return self._pack([self._ex[pool[i]] for i in sel], device, pin_memory)
 
-        x = np.full((batch_size, width), self.pad_id, dtype=np.int64)
-        y = np.full((batch_size, width), IGNORE_INDEX, dtype=np.int64)
+    def sweep(
+        self,
+        batch_size: int,
+        device: str | torch.device,
+        val: bool = True,
+        pin_memory: bool = False,
+    ) -> Iterator[tuple[Tensor, Tensor]]:
+        """Yield every example in the split exactly once, deterministically.
+
+        ``batch`` samples *with replacement* - right for training, wrong for a
+        reported metric: the result then depends on ``iters``, ``batch_size`` and
+        the seed, and is a perplexity over a random multiset rather than over the
+        holdout. This is the measurement path.
+
+        Examples are ordered by length so each batch pads to near its own
+        longest. That is exactly loss-invariant - padding sits at the tail, the
+        attention is causal so trailing pads cannot reach earlier positions, and
+        pad targets carry ``IGNORE_INDEX`` - while cutting both wasted compute and
+        peak memory, which is what lets a full sweep run at a usable batch size.
+        """
+        pool = self._pool(val)
+        if len(pool) == 0:
+            raise ValueError(f"no examples in the {'val' if val else 'train'} split")
+        order = sorted(pool.tolist(), key=lambda i: (len(self._ex[i][0]), i))
+        for start in range(0, len(order), batch_size):
+            yield self._pack(
+                [self._ex[i] for i in order[start : start + batch_size]], device, pin_memory
+            )
+
+    def _pack(
+        self,
+        rows: list[tuple[np.ndarray, int]],
+        device: str | torch.device,
+        pin_memory: bool,
+    ) -> tuple[Tensor, Tensor]:
+        """Pad ``rows`` to the widest and build the response-only target mask."""
+        width = max(len(ids) for ids, _ in rows)
+        x = np.full((len(rows), width), self.pad_id, dtype=np.int64)
+        y = np.full((len(rows), width), IGNORE_INDEX, dtype=np.int64)
         for r, (ids, prompt_len) in enumerate(rows):
             n = len(ids)
             x[r, :n] = ids

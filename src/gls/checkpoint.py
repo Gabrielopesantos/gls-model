@@ -143,9 +143,16 @@ def save(
     *,
     val_loss: float | None = None,
     keep_last: int = 3,
+    min_improvement: float = 0.0,
 ) -> Path:
     """Write ``checkpoints/step-NNNNNN/`` atomically, update ``latest.json``,
-    update ``best.json`` when ``val_loss`` improves, then rotate."""
+    update ``best.json`` when ``val_loss`` improves by more than
+    ``min_improvement``, then rotate.
+
+    The threshold matters because ``best.json`` is what ``resolve_init`` hands a
+    fine-tune. An unguarded ``<`` chases eval noise and can pin a checkpoint that
+    never finished its LR schedule.
+    """
     ckpt_root = run_dir / CKPT_SUBDIR
     ckpt_root.mkdir(parents=True, exist_ok=True)
     name = f"step-{step:06d}"
@@ -163,7 +170,9 @@ def save(
     _write_pointer(ckpt_root / "latest.json", {"path": name, "step": step})
 
     prev_best = _read_pointer(ckpt_root / "best.json")
-    if val_loss is not None and (prev_best is None or val_loss < prev_best["val_loss"]):
+    if val_loss is not None and (
+        prev_best is None or val_loss < prev_best["val_loss"] - min_improvement
+    ):
         _write_pointer(ckpt_root / "best.json", {"path": name, "step": step, "val_loss": val_loss})
 
     _rotate(ckpt_root, keep_last)
