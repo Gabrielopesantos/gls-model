@@ -1,62 +1,10 @@
 # vast.ai runbook
 
 Rent a GPU box on vast.ai, push the code, run a training config, sync
-checkpoints to B2, tear down.
-
-The immediate use is the blocked deliverable - a pretrained `medium` base,
-`configs/medium-fineweb.toml`, 20000 steps × 262144 tokens = 5.24B tokens on
-fineweb-edu `sample-10BT`, batch 8 at ctx 2048 ≈ **~22 GiB** - but the scripts
-are parameterised (see **Knobs**), so a different config, corpus, or GPU shape is
-an env var, not an edit.
+checkpoints to object storage, tear down.
 
 Everything runs from the devenv shell (`vastai` + `rclone` on PATH, `.env`
 sourced). `vastai` reads `VAST_API_KEY` from the environment directly.
-
-## Prerequisites
-
-- **A dedicated SSH key**, not the GPG smartcard key. vast injects account keys
-  into every box; `vastai ssh-url` hands back a **direct IP**, which no
-  `~/.ssh/config` `Host *.vast.ai` block matches, so `ssh` would offer the
-  smartcard key first and fail. `push.sh` pins `-i ~/.ssh/vast_ed25519
-  -o IdentitiesOnly=yes`.
-
-  ```
-  ssh-keygen -t ed25519 -f ~/.ssh/vast_ed25519
-  vastai create ssh-key "$(cat ~/.ssh/vast_ed25519.pub)"
-  ```
-
-  `~/.ssh/config` also has a `Host *.vast.ai` block pointing at the same key, for
-  manual proxy connections.
-
-- **The data pack on B2**. Prepared locally once and uploaded - no
-  `gls data prepare`, no HF download on the box:
-
-  ```
-  rclone copy data/packed/fineweb-edu b2:$GLS_B2_BUCKET/gls-data/packed/fineweb-edu --transfers 8
-  ```
-
-## Knobs
-
-`create-template.sh` (machine shape):
-
-| var | default | |
-| --- | --- | --- |
-| `GPU_COUNT` | `1` | `4` searches a 4-GPU box (DDP - see the last section) |
-| `GPU_RAM` | `79` | GB of VRAM per GPU |
-| `DISK` | `120` | GB ephemeral disk |
-| `VAST_IMAGE` | `vastai/base-image:cuda-12.9.2-auto` | slim base; uv brings torch+cu129 |
-| `TEMPLATE_NAME` | `gls-model-${GPU_COUNT}x${GPU_RAM}gb` | |
-| `EXTRA_SEARCH` | - | appended to the offer filter, e.g. `geolocation notin [CN]` |
-
-`push.sh` (defaults reproduce the `medium-fineweb` run):
-
-| var | default | |
-| --- | --- | --- |
-| `VAST_SSH_KEY` | `~/.ssh/vast_ed25519` | identity offered to the box |
-| `CORPUS` | `fineweb-edu` | pulls `b2:$GLS_B2_BUCKET/gls-data/packed/<corpus>` |
-| `UV_GROUPS` | `dev track` | dependency groups synced on the box |
-| `CONFIG` | `configs/medium-fineweb.toml` | closing hint only |
-| `WAIT_SECS` | `600` | cap on the provisioning wait |
 
 ## 1. Create the template (once, or after editing `onstart.sh`)
 
@@ -66,9 +14,8 @@ infra/vast/create-template.sh                      # gls-model-1x80gb
 
 Idempotent - looks the template up by name and updates in place. Bakes in the
 disk size, the non-secret env, the onstart script, and a `--search_params`
-filter for the shape. **No secret is stored in a template** (`HF_TOKEN` /
-`WANDB_API_KEY` / `RCLONE_CONFIG_B2_*` reach the box only via `.env` in step 3);
-never pass `--public`.
+filter for the shape. No secret is stored in a template (remote credentials reach the box only via
+`.env` in step 3); never pass `--public`.
 
 It prints the matching `vastai search offers` line and a verify command.
 
@@ -90,8 +37,9 @@ infra/vast/push.sh <instance-id>
 
 Waits for the onstart sentinel (bounded by `WAIT_SECS`; an ssh auth failure is
 fatal, not "still provisioning"), rsyncs the git-tracked tree and `.env`
-(chmod 600) over SSH, then **on the box**: `rclone copy` the data pack from B2,
-`uv sync`, and `gls env | tee runs/rented-env.txt` (paste into `hardware.md`).
+(chmod 600) over SSH, then on the box: `rclone copy` the data pack from
+`$GLS_REMOTE`, `uv sync`, and `gls env | tee runs/rented-env.txt` (paste into
+`hardware.md`).
 
 `--no-data` skips the pack; `--no-sync` skips `uv sync`.
 
@@ -105,80 +53,91 @@ uv run gls train --config configs/medium-fineweb.toml --resume auto --wandb
 ```
 
 `--resume auto` is a no-op on a fresh run and picks up `latest.json` on
-re-launch, so **the recovery command is identical to the launch command**. On
+re-launch, so the recovery command is identical to the launch command. On
 preemption the box gets SIGTERM: the loop checkpoints, fires `sync_cmd`, waits
 for it, exits clean. Bring up a new instance, repeat steps 2–4, re-run the same
-line - pull `latest.json` back from B2 first if the disk is empty.
+line - pull `latest.json` back from object storage first if the disk is empty.
 
 `patience = 0` in `medium-fineweb.toml` - the run does not self-limit. Watch
 `eval/val_loss`, `train/eta_s`, `train/peak_mem_gib`, and `train/tokens_per_sec`
 (phase-1.5's single-GPU baseline) in W&B. `vastai stop instance` (SIGTERM) or
 Ctrl-C is the clean manual stop.
 
-## 5. Checkpoints → Backblaze B2
+## 5. Checkpoints -> object storage
 
 `sync_cmd` in the config runs after every save:
 
 ```
-rclone copy --transfers 8 {ckpt} b2:$GLS_B2_BUCKET/gls-runs/$(basename {run})/$(basename {ckpt})
+rclone copy --transfers 8 --exclude '*.tmp/**' {run} $GLS_REMOTE:$GLS_BUCKET/gls-runs/$(basename {run})
 ```
 
-`{run}` is `runs/<run_name>`, so the destination is keyed by `run_name`
+`$GLS_REMOTE`/`$GLS_BUCKET` expand on the box from `/etc/profile.d/gls.sh`
+(written by `onstart.sh`; default `b2` / `GLS_B2_BUCKET`). `{run}` is
+`runs/<run_name>`, so the destination is keyed by `run_name`
 (`gls-runs/medium-fineweb/…`) and the same line drops into any config
-unchanged. `RCLONE_CONFIG_B2_*` and `GLS_B2_BUCKET`
-(`santoslabs-training-checkpoints`) come from `.env` - no `rclone.conf` - and the
-same bucket holds the data pack under `gls-data/`.
+unchanged. The `RCLONE_CONFIG_*` remote credentials and the bucket
+come from `.env` - no `rclone.conf` - and the same bucket holds the 
+data pack under `gls-data/`.
+
+It syncs the whole run tree, so the destination is a mirror of the local run
+dir - `gls-runs/<name>/checkpoints/step-NNNNNN/`, one level deeper than the old
+`{ckpt}`-only line put it, plus the pointer files, `train_config.json`,
+`log.jsonl` and `env.json`. `rclone copy` transfers only what is missing or
+changed at the destination and never deletes, so each save still moves ~one
+checkpoint and the remote keeps rotated step dirs. A run synced under the old
+flat layout is untouched but will not match.
 
 `medium` checkpoint ≈ 3.6 GB; `ckpt_interval = 1000` over 20000 steps ≈ 20 saves
-≈ **~70 GB** through the hook. The link must move 3.6 GB inside one
-`ckpt_interval` or `_sync` skips one - stderr warning only
-(`sync_cmd from the previous checkpoint still running`). Set the B2 key + bucket
-**before step 0**.
+≈ ~70 GB through the hook. The link must move 3.6 GB inside one
+`ckpt_interval` or `_sync` skips that save during the loop - stderr warning only
+(`sync_cmd from the previous checkpoint still running`). The sync at exit is
+different: it waits out any in-flight upload, then runs once more and blocks
+until it lands, so `done`/`sigterm` and the final pointers always reach the
+bucket. Set the remote credentials + bucket before step 0.
 
-## 6. Evacuate before teardown
+## 6. Verify the run landed before teardown
 
-**`sync_cmd` copies `{ckpt}` only - the step dir.** Three things live outside it
-and never reach B2 on their own:
+The per-save sync now carries everything needed to resume or score the run off
+the box - these all ride along in the run tree and used to need a manual copy:
 
 | | why it matters |
 | --- | --- |
-| `checkpoints/latest.json`, `checkpoints/best.json` | written at `checkpoints/` root, one level above `{ckpt}`. Without them `--ckpt runs/<name>` fails: `resolve_init` finds no `model.safetensors` and no pointer. |
-| `train_config.json` | `gls eval ppl` reads seed / `val_fraction` / `block_size` from it. Missing, it silently falls back to seed 1337 and `DEFAULT_VAL_FRACTION` and carves a *different* holdout. |
+| `checkpoints/latest.json`, `checkpoints/best.json` | without them `--ckpt runs/<name>` fails: `resolve_init` finds no `model.safetensors` and no pointer. |
+| `train_config.json` | `gls eval ppl` reads seed / `val_fraction` / `block_size` from it. Missing, it silently falls back to seed 1337 and `DEFAULT_VAL_FRACTION` and carves a different holdout. |
 | `log.jsonl` | the metric history, including the `train/tokens_per_sec` series phase-1.5 wants. |
 
-So do a whole-tree copy before destroying anything, and **verify it**:
+Confirm the bucket matches the box before destroying anything:
 
 ```
-rclone copy runs/ b2:$GLS_B2_BUCKET/gls-runs-full/ --transfers 8 --progress
-rclone check runs/ b2:$GLS_B2_BUCKET/gls-runs-full/
+rclone check runs/ $GLS_REMOTE:$GLS_BUCKET/gls-runs/ --one-way
 ```
 
 W&B holds the config and history too, so a run tracked with `--wandb` can be
 reconstructed after the fact (`api.run(...).config` / `.scan_history()`). The
-pointer files cannot - they exist only on the box.
+pointer files cannot - they exist only on the box until the sync lands.
 
-Two B2 hazards worth knowing before you reorganise anything:
+Two B2 hazards worth knowing before you reorganise anything (B2-specific;
+another backend has its own delete semantics):
 
-- `rclone purge` removes **all versions** - it is a hard delete. `rclone delete`
+- `rclone purge` removes all versions - it is a hard delete. `rclone delete`
   and `rclone move` only write a hide marker, and the bytes stay recoverable via
   `rclone lsf --b2-versions` / `rclone copyto --b2-versions`. Prefer copy, verify
   with `rclone md5sum` on both sides, and only then delete.
-- Copy a checkpoint to a *prefix* rather than a step dir and its three files land
-  loose at the prefix root, where nothing will ever find them.
+- Only for a hand-run copy: point it at a *prefix* rather than a step dir and the
+  checkpoint's files land loose at the prefix root, where nothing will find them.
+  The `sync_cmd` mirrors the tree, so the automatic path is not exposed to this.
 
-## 7. Evaluate locally, teardown
+## 7. Evaluate locally
 
 ```
-rclone copy b2:$GLS_B2_BUCKET/gls-runs/medium-fineweb/ runs/medium-fineweb/checkpoints/
+rclone copy $GLS_REMOTE:$GLS_BUCKET/gls-runs/medium-fineweb/ runs/medium-fineweb/
 gls eval ppl --ckpt runs/medium-fineweb --corpus dolly --val-fraction 0.05 --batch-size 8
 
 gls eval ppl --ckpt runs/medium-dolly-sft --corpus dolly --val-fraction 0.05 --batch-size 8
 gls eval harness --ckpt runs/medium-dolly-sft
-
-vastai destroy instance <instance-id>                           # billing is per-minute
 ```
 
-`--val-fraction 0.05` on **both** sides: the pretrain config records `0.005` and
+`--val-fraction 0.05` on both sides: the pretrain config records `0.005` and
 the SFT config `0.05`, so without the flag each checkpoint is scored on a
 different holdout and the before/after is not a comparison. `gls eval ppl` prints
 the resolved `seed / val_fraction / block_size` it used - check the two lines
@@ -188,25 +147,25 @@ match.
 tensor with `.float()`: ~2 GB at batch 8, ~4 GB at 16, against an 11.6 GiB card.
 
 Eval and inference run fine on the local card (`medium` is 0.57 GiB bf16), so
-only the pretrain needs the rental. **The SFT does not** run locally at the
+only the pretrain needs the rental. The SFT does not run locally at the
 pretrain's batch shape - see the SFT sizing note in
 [hardware.md](../../privatedocs/reference/hardware.md); it needs `batch_size = 4`
 and `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`.
 
 ## Multi-GPU (DDP) - the seam, not yet the road
 
-`src/gls` has no `torch.distributed` yet (phase-1.5). What is already in place:
+`src/gls` has no `torch.distributed` yet. What is already in place:
 
 - `create-template.sh` - `GPU_COUNT=4 GPU_RAM=79 DISK=200 infra/vast/create-template.sh`
   makes a `gls-model-4x79gb` template whose offer filter is `num_gpus=4`.
 - `src/gls/data.py` - `PackedData` takes `(rank, world_size)`, default `(0, 1)`.
 - `src/gls/cli.py` - has the `__main__` guard, so `python -m gls.cli` works.
 
-When distributed init lands, the only launch change (step 4) is:
+When distributed init lands, the only launch change is:
 
 ```
 torchrun --standalone --nproc_per_node=$GPU_COUNT -m gls.cli train --config <cfg> --resume auto --wandb
 ```
 
-Nothing in `infra/vast/` changes. `push.sh` and the B2 `sync_cmd` are
+Nothing in `infra/vast/` changes. `push.sh` and the `sync_cmd` are
 rank-agnostic (rank 0 writes checkpoints).
