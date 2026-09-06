@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install (CPU torch)
+        # --no-sources bypasses the cu129 index pin in pyproject.toml
+        # ([tool.uv.sources]); --torch-backend=cpu then resolves the small CPU
+        # wheel instead of the ~2.5 GB CUDA one. Groups match devenv's `uv.sync`
+        # (dev + track + infra) so pyright sees wandb/vastai; the `eval` group
+        # (lm-eval, transformers) stays out - those tests importorskip.
+        run: |
+          uv venv --python 3.12
+          uv pip install --no-sources --torch-backend=cpu \
+            --group dev --group track --group infra --editable .
+
+      - run: uv run --no-sync ruff format --check .
+      - run: uv run --no-sync ruff check .
+      - run: uv run --no-sync pyright
+      - run: uv run --no-sync pytest -q
