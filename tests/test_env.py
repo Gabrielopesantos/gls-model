@@ -1,6 +1,6 @@
 import torch
 
-from gls.env import describe
+from gls.env import describe, peak_bf16_flops
 
 
 def test_describe_reports_expected_keys():
@@ -16,6 +16,11 @@ def test_describe_reports_expected_keys():
     }
     assert info["torch"].startswith("2.")
     assert info["device_count"] == len(info["devices"])
+
+
+def test_peak_bf16_flops_known_and_unknown():
+    assert peak_bf16_flops("NVIDIA A100-SXM4-40GB") == 312e12
+    assert peak_bf16_flops("NVIDIA GeForce RTX 4070 SUPER") is None  # not listed: no guess
 
 
 def test_cuda_is_usable():

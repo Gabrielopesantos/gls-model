@@ -60,14 +60,14 @@ def perplexity(
 ) -> dict[str, float]:
     """Token-weighted mean response-token loss and its exp.
 
-    Default (``iters=None``) is a **deterministic full sweep**: every example in
+    Default (``iters=None``) is a deterministic full sweep: every example in
     the split scored exactly once. The number then depends only on
     (checkpoint, corpus, split, seed, val_fraction, block_size) - not on
     ``batch_size``, and not on how long you let it run - so two checkpoints are
     comparable and a rerun reproduces the value exactly.
 
     Passing ``iters`` restores the old sampled estimate (``iters`` batches drawn
-    *with replacement*), which is cheaper on a large split but is a perplexity
+    with replacement), which is cheaper on a large split but is a perplexity
     over a random multiset, not over the holdout.
 
     ``seed``/``val_fraction`` default to the values recorded in the checkpoint's

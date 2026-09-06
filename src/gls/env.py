@@ -37,3 +37,29 @@ def describe() -> dict[str, Any]:
         )
 
     return info
+
+
+# Dense bf16 tensor-core peak (FP32 accumulate), FLOP/s, keyed on
+# ``torch.cuda.get_device_name``. Only the datacenter cards a real training run
+# lands on are listed - a card not here logs no ``train/mfu`` rather than a wrong
+# one. Consumer Ada parts are deliberately absent: their marketed tensor figure
+# is 2:4-sparse, and the dense bf16 number is ambiguous enough that a guess would
+# defeat the point of the metric.
+_PEAK_BF16_FLOPS: dict[str, float] = {
+    "NVIDIA A100-SXM4-40GB": 312e12,
+    "NVIDIA A100-SXM4-80GB": 312e12,
+    "NVIDIA A100 80GB PCIe": 312e12,
+    "NVIDIA H100 80GB HBM3": 989e12,
+    "NVIDIA H100 PCIe": 756e12,
+    "NVIDIA L40S": 362e12,
+}
+
+
+def peak_bf16_flops(device_name: str | None = None) -> float | None:
+    """Known dense bf16 peak for ``device_name`` (default: the first visible
+    CUDA device), or ``None`` when the card is unlisted or there is no CUDA."""
+    if device_name is None:
+        if not torch.cuda.is_available():
+            return None
+        device_name = torch.cuda.get_device_name(0)
+    return _PEAK_BF16_FLOPS.get(device_name)

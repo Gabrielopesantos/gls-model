@@ -76,9 +76,7 @@ def _events(run_dir) -> list[dict]:
 
 def _script_val(monkeypatch, values):
     it = iter(values)
-    monkeypatch.setattr(
-        T.Trainer, "eval_step", lambda self, data, step: {"train": 1.0, "val": next(it)}
-    )
+    monkeypatch.setattr(T.Trainer, "eval_step", lambda self, data: {"train": 1.0, "val": next(it)})
 
 
 def test_best_checkpoint_captured_between_ckpt_marks(env, monkeypatch):

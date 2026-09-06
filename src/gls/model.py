@@ -408,6 +408,21 @@ class GLSModel(nn.Module):
         """Tied weights are counted once (nn.Module.parameters dedupes)."""
         return sum(p.numel() for p in self.parameters() if p.requires_grad or not trainable_only)
 
+    def flops_per_token(self, seq_len: int) -> float:
+        """Forward+backward FLOPs for one token at context ``seq_len`` - the PaLM
+        appendix estimate (``nanoGPT``'s ``estimate_mfu``): ``6N`` for the
+        parameter matmuls plus ``12 * n_layers * d_model * seq_len`` for attention
+        (QK^T and AV, ×2 mul+add, ×3 fwd+bwd; ``n_heads * head_dim == d_model`` in
+        every preset, so the term is written in ``d_model``).
+
+        Feeds ``train/mfu``. The figure in ``medium-run-results.md`` (~42%)
+        predates this and used a smaller hand-estimated attention term (2.12 vs
+        2.42 GFLOP/token at the ``medium`` shape); recomputed with this formula
+        the same run is ~48% MFU.
+        """
+        n = self.num_parameters(trainable_only=False)
+        return 6 * n + 12 * self.cfg.n_layers * self.cfg.d_model * seq_len
+
 
 def build_model(tier: str) -> GLSModel:
     if tier not in PRESETS:
