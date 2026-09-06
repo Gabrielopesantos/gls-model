@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# vast.ai onstart script for the `medium` pretrain box.
+# vast.ai onstart script for the pretrain box.
 #
 # Runs as root on every instance start, before any project code is on the
 # machine. So this only prepares the box:
@@ -47,18 +47,23 @@ mkdir -p "$GLS_ROOT" "$HF_HOME"
 # main process, but docker env does not reach an interactive `ssh` login shell
 # reliably - and .env (with the secrets) only exists after push.sh runs. So
 # re-export here, mirroring devenv.nix enterShell, so an SSH session and `gls`
-# both see GLS_ROOT + HF_TOKEN/WANDB_API_KEY/RCLONE_CONFIG_B2_*/GLS_B2_BUCKET.
+# both see GLS_ROOT + HF_TOKEN/WANDB_API_KEY, the rclone remote, and the bucket.
+#
+# GLS_REMOTE/GLS_BUCKET default to Backblaze B2; .env (sourced below) overrides
+# either - point GLS_REMOTE at another rclone remote to switch object storage.
 cat >/etc/profile.d/gls.sh <<EOF
 export GLS_ROOT="$GLS_ROOT"
 export HF_HOME="$HF_HOME"
 export PATH="/usr/local/bin:\$PATH"
 export PYTHONUNBUFFERED=1
 export TOKENIZERS_PARALLELISM=false
+export GLS_REMOTE="\${GLS_REMOTE:-b2}"
 if [ -f "$GLS_ROOT/.env" ]; then
 	set -a
 	. "$GLS_ROOT/.env"
 	set +a
 fi
+export GLS_BUCKET="\${GLS_BUCKET:-\${GLS_B2_BUCKET:-}}"
 cd "$GLS_ROOT" 2>/dev/null || true
 EOF
 chmod 0644 /etc/profile.d/gls.sh

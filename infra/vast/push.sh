@@ -7,25 +7,30 @@
 # --no-data  skip pulling the data pack (smoke tests)
 # --no-sync  skip `uv sync` on the box
 #
-# The data pack comes from Backblaze B2 (pulled ON the box - datacenter downlink,
-# not the home uplink), so only the git tree + .env cross the SSH link.
+# The data pack comes from object storage (Backblaze B2 by default; GLS_REMOTE
+# picks the rclone remote) pulled on the box.
 #
 # Knobs (defaults reproduce today's medium-fineweb behaviour):
 #   VAST_SSH_KEY=$HOME/.ssh/vast_ed25519   identity offered to the box
 #   REMOTE_ROOT=/workspace/gls-model
 #   CORPUS=fineweb-edu                     data/packed/<corpus> to pull
-#   B2_DATA_PREFIX=gls-data/packed         under b2:$GLS_B2_BUCKET/
+#   GLS_REMOTE=b2                          rclone remote name (r2, s3, ... via .env)
+#   GLS_BUCKET=$GLS_B2_BUCKET              bucket; falls back to the legacy var
+#   DATA_PREFIX=gls-data/packed            under $GLS_REMOTE:$GLS_BUCKET/
 #   UV_GROUPS="dev track"
 #   CONFIG=configs/medium-fineweb.toml     only used in the closing hint
 #   WAIT_SECS=600                          cap on the provisioning wait
 #
-# Run from the repo (needs vastai + VAST_API_KEY; .env supplies GLS_B2_BUCKET).
+# Run from the repo (needs vastai + VAST_API_KEY; .env supplies the rclone remote
+# and GLS_BUCKET / GLS_B2_BUCKET).
 set -euo pipefail
 
 VAST_SSH_KEY="${VAST_SSH_KEY:-$HOME/.ssh/vast_ed25519}"
 REMOTE_ROOT="${REMOTE_ROOT:-/workspace/gls-model}"
 CORPUS="${CORPUS:-fineweb-edu}"
-B2_DATA_PREFIX="${B2_DATA_PREFIX:-gls-data/packed}"
+GLS_REMOTE="${GLS_REMOTE:-b2}"
+GLS_BUCKET="${GLS_BUCKET:-${GLS_B2_BUCKET:-}}"
+DATA_PREFIX="${DATA_PREFIX:-gls-data/packed}"
 UV_GROUPS="${UV_GROUPS:-dev track}"
 CONFIG="${CONFIG:-configs/medium-fineweb.toml}"
 WAIT_SECS="${WAIT_SECS:-600}"
@@ -104,10 +109,11 @@ rsync -az -e "$RSH" .env "$DEST:$REMOTE_ROOT/.env"
 "${SSH[@]}" "chmod 600 $REMOTE_ROOT/.env"
 
 if [ "$DO_DATA" -eq 1 ]; then
-	echo "== data pack ($CORPUS, B2 -> box) =="
+	: "${GLS_BUCKET:?set GLS_BUCKET in .env}"
+	echo "== data pack ($CORPUS, $GLS_REMOTE -> box) =="
 	"${SSH[@]}" "set -a; . $REMOTE_ROOT/.env; set +a; \
 		rclone copy --transfers 16 --fast-list \
-		b2:\$GLS_B2_BUCKET/$B2_DATA_PREFIX/$CORPUS \
+		$GLS_REMOTE:$GLS_BUCKET/$DATA_PREFIX/$CORPUS \
 		$REMOTE_ROOT/data/packed/$CORPUS"
 fi
 

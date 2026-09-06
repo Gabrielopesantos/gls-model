@@ -216,33 +216,42 @@ def train(cfg: TrainConfig) -> Path:
     def _due(step: int, interval: int) -> bool:
         return (step + 1) % interval == 0 or step == cfg.steps - 1
 
-    def _sync(ckpt_dir: Path) -> None:
+    def _sync(ckpt_dir: Path, *, final: bool = False) -> None:
         """Fire ``cfg.sync_cmd`` for a just-written checkpoint. Non-blocking and
         best-effort: a rented box needs each checkpoint copied off its ephemeral
         disk, but a slow or failing upload must never reach into the loop - same
         contract ``gls.tracking`` gives W&B. One upload in flight at a time; a
-        slow one skips a checkpoint rather than piling processes up."""
+        slow one skips a checkpoint rather than piling processes up.
+
+        ``final=True`` is the teardown call: it waits out an in-flight upload
+        instead of skipping, then blocks on its own. The last checkpoint - the
+        whole point of the SIGTERM save - has to land, and by this point the loop
+        is over so blocking costs nothing."""
         nonlocal sync_proc
         if not cfg.sync_cmd:
             return
         if sync_proc is not None and sync_proc.poll() is None:
-            _note("sync_cmd from the previous checkpoint still running; skipping this one")
-            return
+            if not final:
+                _note("sync_cmd from the previous checkpoint still running; skipping this one")
+                return
+            _note("waiting on the in-flight checkpoint sync...")
+            sync_proc.wait()
         cmd = cfg.sync_cmd.format(ckpt=str(ckpt_dir), run=str(run_dir))
         nonlocal sync_logged
         if not sync_logged:
             # Log the resolved command once. A sync_cmd that hardcodes a run name
             # instead of using {run} sends this run's checkpoints into another
-            # run's destination, and does it silently at every save - which is
-            # exactly how the medium-dolly-sft checkpoints ended up under the
-            # medium-fineweb prefix. Printing the first resolved command makes the
-            # destination visible in the log before the second checkpoint exists.
+            # run's destination, and does it silently at every save.
             _note(f"sync_cmd -> {cmd}")
             sync_logged = True
         try:
             sync_proc = subprocess.Popen(cmd, shell=True)
         except OSError as exc:
             _note(f"sync_cmd failed to launch: {exc}")
+            return
+        if final:
+            _note("waiting on the final checkpoint sync...")
+            sync_proc.wait()
 
     def _checkpoint(step_after: int, val_now: float | None) -> None:
         nonlocal best_val
@@ -324,10 +333,7 @@ def train(cfg: TrainConfig) -> Path:
                     #
                     # min_improvement gates this the same way it gates the
                     # patience counter above. Without it a bare `<` chases eval
-                    # noise: the medium-fineweb run picked step 17500 (2.8922)
-                    # over the fully-annealed step 20000 (2.8938) on 0.0016 nats,
-                    # handing every downstream deliverable a checkpoint that
-                    # never finished its cosine.
+                    # noise.
                     if best_val is None or val_now < best_val - cfg.min_improvement:
                         _checkpoint(step + 1, val_now)
                         saved_after = step + 1
@@ -365,11 +371,11 @@ def train(cfg: TrainConfig) -> Path:
     else:
         run.event({"event": "done", "total_s": total_s, "step": cfg.steps})
 
-    if sync_proc is not None:
-        _note("waiting on the final checkpoint sync...")
-        sync_proc.wait()
     run.finish()
     data.close()
+    # After run.finish() so the run-tree sync carries the terminal log.jsonl row
+    # (the done / sigterm / early_stop event) and the final pointer files.
+    _sync(run_dir, final=True)
     _note(f"done in {total_s}s -> {run_dir}")
     return run_dir
 

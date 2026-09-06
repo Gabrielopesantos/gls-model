@@ -95,11 +95,15 @@
     };
 
   enterShell = ''
+    # Object storage defaults to Backblaze B2; .env overrides either to switch
+    # rclone remotes. Mirrored in infra/vast/onstart.sh's profile.d.
+    export GLS_REMOTE="''${GLS_REMOTE:-b2}"
     if [ -f "$DEVENV_ROOT/.env" ]; then
       set -a
       . "$DEVENV_ROOT/.env"
       set +a
     fi
+    export GLS_BUCKET="''${GLS_BUCKET:-''${GLS_B2_BUCKET:-}}"
 
     echo "gls-model"
   '';

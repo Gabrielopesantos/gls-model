@@ -40,7 +40,8 @@ eval_iters = 40
 ckpt_interval = 100
 keep_last = 3
 
-sync_cmd = "rclone copy --transfers 8 {ckpt} b2:$GLS_B2_BUCKET/gls-runs/$(basename {run})/$(basename {ckpt})"
+# Sync the whole run tree, not just {ckpt}.
+sync_cmd = "rclone copy --transfers 8 --exclude '*.tmp/**' {run} $GLS_REMOTE:$GLS_BUCKET/gls-runs/$(basename {run})"
 
 run_name = "medium-dolly-sft"
 wandb_project = "gls-model"

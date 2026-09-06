@@ -7,33 +7,30 @@
 # shape updates that template in place rather than making a duplicate.
 #
 # Knobs (all optional; defaults reproduce the original 1x80GB template):
-#   GPU_COUNT=1   GPU_RAM=79   DISK=120
+#   GPU_COUNT=1   GPU_RAM=79   DISK=60
 #   VAST_IMAGE=vastai/base-image:cuda-12.9.2-auto
 #   REMOTE_ROOT=/workspace/gls-model
 #   PY_VERSION=3.12
+#   CUDA_VERS=12.4   # offer filter floor; see the cuda_vers rationale below
 #   TEMPLATE_NAME=gls-model-${GPU_COUNT}x${GPU_RAM}gb
 #   EXTRA_SEARCH=            # appended to the offer filter, e.g. 'geolocation notin [CN]'
 #
-#   GPU_COUNT=4 DISK=200 infra/vast/create-template.sh    # a DDP box (phase-1.5)
-#
-# SECURITY: nothing secret goes in a template - vast.ai stores the --env string
-# server-side and templates can be shared. HF_TOKEN / WANDB_API_KEY /
-# RCLONE_CONFIG_B2_* reach the box only via the .env that push.sh rsyncs over
-# SSH. Never add --public here.
+#   GPU_COUNT=4 DISK=200 infra/vast/create-template.sh
 #
 # Needs VAST_API_KEY in the environment (the vastai CLI reads it directly; the
-# devenv shell sources .env). Run from anywhere.
+# devenv shell sources .env).
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 : "${VAST_API_KEY:?set VAST_API_KEY (it is in .env; enter the devenv shell)}"
 
 GPU_COUNT="${GPU_COUNT:-1}"
-GPU_RAM="${GPU_RAM:-80}"   # GB floor; vast's search takes GB and stores MB itself
-DISK="${DISK:-120}"
+GPU_RAM="${GPU_RAM:-40}"   # GB floor; vast's search takes GB and stores MB itself
+DISK="${DISK:-60}"
 VAST_IMAGE="${VAST_IMAGE:-vastai/base-image:cuda-12.9.2-auto}"
 REMOTE_ROOT="${REMOTE_ROOT:-/workspace/gls-model}"
 PY_VERSION="${PY_VERSION:-3.12}"
+CUDA_VERS="${CUDA_VERS:-12.4}"
 TEMPLATE_NAME="${TEMPLATE_NAME:-gls-model-${GPU_COUNT}x${GPU_RAM}gb}"
 EXTRA_SEARCH="${EXTRA_SEARCH:-}"
 
@@ -41,10 +38,10 @@ EXTRA_SEARCH="${EXTRA_SEARCH:-}"
 # the interpreter without being edited.
 ENV_STR="-e GLS_ROOT=$REMOTE_ROOT -e HF_HOME=/workspace/hf-cache -e PY_VERSION=$PY_VERSION -e PYTHONUNBUFFERED=1 -e TOKENIZERS_PARALLELISM=false -e WANDB_PROJECT=gls-model"
 
-# The machine shape. cuda_vers>=12.4 not >=12.9 - CUDA 12.x minor-version compat
-# means the cu129 torch wheels run on any driver >=525 (see pyproject.toml's
-# cu129 rationale).
-SEARCH="num_gpus=$GPU_COUNT gpu_ram>=$GPU_RAM disk_space>=$DISK cuda_vers>=12.4 reliability>0.98 inet_down>=500 inet_up>=200 direct_port_count>=2 rentable=true verified=true"
+# The machine shape. CUDA_VERS defaults to 12.4, not 12.9 - CUDA 12.x
+# minor-version compat means the cu129 torch wheels run on any driver >=525
+# (see pyproject.toml's cu129 rationale).
+SEARCH="num_gpus=$GPU_COUNT gpu_ram>=$GPU_RAM disk_space>=$DISK cuda_vers>=$CUDA_VERS reliability>0.98 inet_down>=500 inet_up>=200 direct_port_count>=2 rentable=true verified=true"
 [ -n "$EXTRA_SEARCH" ] && SEARCH="$SEARCH $EXTRA_SEARCH"
 
 ONSTART="$(cat "$HERE/onstart.sh")"
@@ -62,7 +59,7 @@ common_args=(
 	--env "$ENV_STR"
 	--onstart-cmd "$ONSTART"
 	--search_params "$SEARCH"
-	--desc "gls-model ${GPU_COUNT}x${GPU_RAM}GB (rsync code from machine, data + checkpoints via B2)"
+	--desc "gls-model ${GPU_COUNT}x${GPU_RAM}GB (rsync code from machine, data + checkpoints via object storage - B2 by default)"
 	--readme "$README"
 )
 

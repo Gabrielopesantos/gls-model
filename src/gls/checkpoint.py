@@ -151,7 +151,7 @@ def save(
 
     The threshold matters because ``best.json`` is what ``resolve_init`` hands a
     fine-tune. An unguarded ``<`` chases eval noise and can pin a checkpoint that
-    never finished its LR schedule - see the note in ``gls.train``.
+    never finished its LR schedule.
     """
     ckpt_root = run_dir / CKPT_SUBDIR
     ckpt_root.mkdir(parents=True, exist_ok=True)
