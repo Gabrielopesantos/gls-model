@@ -29,3 +29,7 @@ gls chat --ckpt runs/medium-dolly-sft --prompt "Hello"
 ```
 
 Smaller end-to-end check: `configs/small-tinystories.toml`, then `configs/small-dolly-sft.toml`.
+
+## License
+
+MIT
